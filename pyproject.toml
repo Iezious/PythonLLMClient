@@ -33,7 +33,7 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/USER/LLMClient"
+Repository = "https://github.com/Iezious/PythonLLMClient"
 
 [tool.setuptools.packages.find]
 include = ["llm*"]

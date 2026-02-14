@@ -13,7 +13,15 @@ Async Python client library for interacting with LLM APIs. Provides a unified in
 ## Installation
 
 ```bash
-pip install -e .
+pip install git+https://github.com/Iezious/PythonLLMClient.git
+```
+
+To add as a dependency in your project's `pyproject.toml`:
+
+```toml
+dependencies = [
+    "llm-client @ git+https://github.com/Iezious/PythonLLMClient.git",
+]
 ```
 
 ## Quick Start
