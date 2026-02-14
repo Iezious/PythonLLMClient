@@ -1,5 +1,7 @@
 """LLM client module for handling interactions with different language model APIs."""
 
+__version__ = "0.1.0"
+
 from .exceptions import LLMError
 from .llm_client import LLMClient
 from .ollama import OllamaAPIClient
@@ -8,6 +10,7 @@ from .llama_swap import LlamaSwapAPIClient
 from .llm import get_llm_client, substitute_placeholders
 
 __all__ = [
+    "__version__",
     "LLMError",
     "LLMClient",
     "OllamaAPIClient",

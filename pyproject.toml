@@ -8,8 +8,16 @@ version = "0.1.0"
 description = "Async Python client library for LLM APIs (Ollama, OpenAI, llama-swap)"
 requires-python = ">=3.11"
 license = "MIT"
+readme = "README.md"
 authors = [
     { name = "serge" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
     "aiohttp>=3.9",
@@ -23,6 +31,9 @@ dev = [
     "aioresponses>=0.7",
     "ruff>=0.4",
 ]
+
+[project.urls]
+Repository = "https://github.com/USER/LLMClient"
 
 [tool.setuptools.packages.find]
 include = ["llm*"]
