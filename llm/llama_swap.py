@@ -60,6 +60,12 @@ class LlamaSwapAPIClient(LLMClient):
             raise LLMError(f"Invalid response from llama-swap when listing models: {response}")
         return [model["id"] for model in response["data"]]
 
+    async def get_models(self) -> List[Dict[str, Any]]:
+        response = await self._request("GET", "/models")
+        if "data" not in response:
+            raise LLMError(f"Invalid response from llama-swap when fetching models: {response}")
+        return response["data"]
+
     async def chat(
         self,
         messages: List[LLMMessage],

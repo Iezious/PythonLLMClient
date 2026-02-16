@@ -53,6 +53,32 @@ async def test_llamaswap_embed_batch():
             assert all(isinstance(x, float) for x in v)
 
 @pytest.mark.asyncio
+async def test_llamaswap_get_models():
+    client = LlamaSwapAPIClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
+    async with client:
+        models = await client.get_models()
+        assert isinstance(models, list)
+        assert len(models) > 0
+        for model in models:
+            assert isinstance(model, dict)
+            assert "id" in model
+
+
+@pytest.mark.asyncio
+async def test_openai_get_models():
+    if not os.environ.get("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set")
+    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL)
+    async with client:
+        models = await client.get_models()
+        assert isinstance(models, list)
+        assert len(models) > 0
+        for model in models:
+            assert isinstance(model, dict)
+            assert "id" in model
+
+
+@pytest.mark.asyncio
 async def test_openai_generate():
     if not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set")
