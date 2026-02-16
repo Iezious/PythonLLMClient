@@ -126,6 +126,9 @@ class LLMClient:
     async def list_models(self) -> List[str]:
         raise NotImplementedError
 
+    async def get_models(self) -> List[Dict[str, Any]]:
+        raise NotImplementedError
+
     async def generate(
         self,
         prompt: str,

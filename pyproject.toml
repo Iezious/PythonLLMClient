@@ -30,6 +30,8 @@ dev = [
     "pytest-asyncio>=0.23",
     "aioresponses>=0.7",
     "ruff>=0.4",
+    "pydantic>=2.0",
+    "langchain-core>=0.2",
 ]
 
 [project.urls]
