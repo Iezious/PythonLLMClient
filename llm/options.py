@@ -41,3 +41,5 @@ class OpenAIOptions(BaseLLMOptions, total=False):
     user: Optional[str]
     stop: Optional[Union[list[str], str]]
     response_format: Optional[Dict[str, str]]
+    enable_thinking: Optional[bool]
+    reasoning_effort: Optional[str]

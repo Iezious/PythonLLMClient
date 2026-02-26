@@ -15,6 +15,8 @@ _LLAMA_SWAP_SUPPORTED_PARAMS: Dict[str, Any] = {
     "presence_penalty": 0.0,
     "frequency_penalty": 0.0,
     "seed": None,
+    "enable_thinking": None,
+    "reasoning_effort": None,
 }
 
 _LLAMA_SWAP_ALIAS_MAP = {
@@ -47,12 +49,15 @@ class LlamaSwapAPIClient(LLMClient):
         *,
         options: Optional[OpenAIOptions],
     ) -> Dict[str, Any]:
-        return self._merge_options_base(
+        opts = self._merge_options_base(
             options=options,
             supported_params=_LLAMA_SWAP_SUPPORTED_PARAMS,
             alias_map=_LLAMA_SWAP_ALIAS_MAP,
             default_opts=self.default_options,
         )
+        # llama-swap uses enable_thinking, not reasoning_effort — drop it.
+        opts.pop("reasoning_effort", None)
+        return opts
 
     async def list_models(self) -> List[str]:
         response = await self._request("GET", "/models")

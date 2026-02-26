@@ -68,6 +68,7 @@ class LLMClient:
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         chunks: List[str] = []
+        in_reasoning = False
         async for data in self._iter_sse_data(response):
             if data == "[DONE]":
                 break
@@ -78,14 +79,44 @@ class LLMClient:
             choices = payload.get("choices") or []
             if not choices:
                 continue
-            delta = (choices[0].get("delta") or {}).get("content")
-            if not delta:
+            delta_obj = choices[0].get("delta") or {}
+            reasoning = delta_obj.get("reasoning_content")
+            content = delta_obj.get("content")
+
+            # Emit reasoning_content wrapped in <think> tags
+            if reasoning:
+                text = ""
+                if not in_reasoning:
+                    in_reasoning = True
+                    text = "<think>" + reasoning
+                else:
+                    text = reasoning
+                chunks.append(text)
+                if on_delta:
+                    result = on_delta(text)
+                    if inspect.isawaitable(result):
+                        await result
                 continue
-            chunks.append(delta)
+
+            if content:
+                text = content
+                if in_reasoning:
+                    in_reasoning = False
+                    text = "</think>" + content
+                chunks.append(text)
+                if on_delta:
+                    result = on_delta(text)
+                    if inspect.isawaitable(result):
+                        await result
+
+        # Close unclosed thinking tag
+        if in_reasoning:
+            chunks.append("</think>")
             if on_delta:
-                result = on_delta(delta)
+                result = on_delta("</think>")
                 if inspect.isawaitable(result):
                     await result
+
         return "".join(chunks)
 
     @staticmethod
