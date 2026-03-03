@@ -5,12 +5,9 @@ from typing import Callable
 import pytest
 from pydantic import BaseModel, Field
 
-from langchain_core.tools import StructuredTool
-from langchain_core.utils.function_calling import convert_to_openai_tool
-
 from llm.llama_swap import LlamaSwapAPIClient
 from llm.openai import OpenAIAPIClient
-
+from llm.tools import pydantic_to_openai_tool
 
 class AddInput(BaseModel):
     a: int = Field(..., description="First integer")
@@ -31,20 +28,10 @@ def _build_tools(called: dict) -> tuple[list[dict], dict[str, object]]:
         called["mul"] = True
         return a * b
 
-    add_tool = StructuredTool.from_function(
-        func=add_impl,
-        name="add",
-        description="Add two integers and return the sum.",
-        args_schema=AddInput,
-    )
-    mul_tool = StructuredTool.from_function(
-        func=mul_impl,
-        name="mul",
-        description="Multiply two integers and return the product.",
-        args_schema=MulInput,
-    )
-
-    tool_defs = [convert_to_openai_tool(add_tool), convert_to_openai_tool(mul_tool)]
+    tool_defs = [
+        pydantic_to_openai_tool("add", "Add two integers and return the sum.", AddInput),
+        pydantic_to_openai_tool("mul", "Multiply two integers and return the product.", MulInput),
+    ]
     tool_funcs = {"add": add_impl, "mul": mul_impl}
     return tool_defs, tool_funcs
 
@@ -60,20 +47,10 @@ def _build_async_tools(called: dict) -> tuple[list[dict], dict[str, Callable]]:
         called["mul"] = True
         return a * b
 
-    add_tool = StructuredTool.from_function(
-        func=add_impl,
-        name="add",
-        description="Add two integers and return the sum.",
-        args_schema=AddInput,
-    )
-    mul_tool = StructuredTool.from_function(
-        func=mul_impl,
-        name="mul",
-        description="Multiply two integers and return the product.",
-        args_schema=MulInput,
-    )
-
-    tool_defs = [convert_to_openai_tool(add_tool), convert_to_openai_tool(mul_tool)]
+    tool_defs = [
+        pydantic_to_openai_tool("add", "Add two integers and return the sum.", AddInput),
+        pydantic_to_openai_tool("mul", "Multiply two integers and return the product.", MulInput),
+    ]
     tool_funcs = {"add": add_impl, "mul": mul_impl}
     return tool_defs, tool_funcs
 
@@ -117,7 +94,7 @@ async def test_llamaswap_chat_with_tools_pydantic():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3-Silent-Scream-6B.i1-Q6_K"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-9B-heretic.i1-Q5_K_M"
 
     client = LlamaSwapAPIClient(model=model, base_url=base_url)
     called = {"add": False, "mul": False}
@@ -183,7 +160,7 @@ async def test_llamaswap_chat_with_async_tools_pydantic():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3-Silent-Scream-6B.i1-Q6_K"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-9B-heretic.i1-Q5_K_M"
 
     client = LlamaSwapAPIClient(model=model, base_url=base_url)
     called = {"add": False, "mul": False}

@@ -86,7 +86,7 @@ async def test_llamaswap_chat_with_tools():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3-Silent-Scream-6B.i1-Q6_K"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-9B-heretic.i1-Q5_K_M"
 
     client = LlamaSwapAPIClient(model=model, base_url=base_url)
     called = {"add": False, "mul": False}

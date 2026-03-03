@@ -5,7 +5,7 @@ from llm.openai import OpenAIAPIClient
 
 # LlamaSwap configuration
 LLAMA_SWAP_BASE_URL = "http://india.loc:9292/v1"
-LLAMA_SWAP_GEN_MODEL = "Qwen3-Silent-Scream-6B.i1-Q6_K"
+LLAMA_SWAP_GEN_MODEL = "Qwen3.5-9B-heretic.i1-Q5_K_M"
 LLAMA_SWAP_EMBED_MODEL = "bge-large-en-v1.5.i1-Q6_K"
 
 # OpenAI configuration

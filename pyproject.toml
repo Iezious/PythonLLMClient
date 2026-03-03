@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-client"
-version = "0.1.1"
+version = "0.1.2"
 description = "Async Python client library for LLM APIs (Ollama, OpenAI, llama-swap)"
 requires-python = ">=3.11"
 license = "MIT"
@@ -31,7 +31,6 @@ dev = [
     "aioresponses>=0.7",
     "ruff>=0.4",
     "pydantic>=2.0",
-    "langchain-core>=0.2",
 ]
 
 [project.urls]
