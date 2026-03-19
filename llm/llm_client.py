@@ -225,6 +225,55 @@ class LLMClient:
         """Embed multiple text strings and return a list of vectors."""
         raise NotImplementedError
 
+    async def _stream_openai_tools_response(
+        self,
+        response: aiohttp.ClientResponse,
+        on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> tuple[str, list[dict]]:
+        """Parse an OpenAI streaming response that may contain tool_calls.
+
+        Accumulates tool_call deltas by index and calls on_delta for content chunks.
+        Returns (content, tool_calls) where tool_calls is empty for final answer rounds.
+        """
+        content_chunks: List[str] = []
+        tool_call_map: Dict[int, dict] = {}
+
+        async for data in self._iter_sse_data(response):
+            if data == "[DONE]":
+                break
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = payload.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                if idx not in tool_call_map:
+                    tool_call_map[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                entry = tool_call_map[idx]
+                if tc.get("id"):
+                    entry["id"] = tc["id"]
+                func = tc.get("function") or {}
+                if func.get("name"):
+                    entry["function"]["name"] += func["name"]
+                if func.get("arguments"):
+                    entry["function"]["arguments"] += func["arguments"]
+
+            content = delta.get("content")
+            if content:
+                content_chunks.append(content)
+                if on_delta:
+                    result = on_delta(content)
+                    if inspect.isawaitable(result):
+                        await result
+
+        tool_calls = [tool_call_map[i] for i in sorted(tool_call_map)]
+        return "".join(content_chunks), tool_calls
+
     async def chat_with_tools(
         self,
         messages: List[Dict[str, str]],
@@ -235,6 +284,7 @@ class LLMClient:
         max_loops: int = 5,
         options: Optional[Dict[str, Any]] = None,
         stream: bool = False,
+        on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         raise NotImplementedError
 

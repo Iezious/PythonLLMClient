@@ -178,6 +178,21 @@ class OpenAIAPIClient(LLMClient):
 
         return response_content
 
+    async def _tools_stream_request(
+        self,
+        payload: Dict[str, Any],
+        on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> tuple[str, list[dict]]:
+        session = await self._ensure_session()
+        url = f"{self.base_url}/chat/completions"
+        headers: Dict[str, str] = {}
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        async with session.post(url, headers=headers, timeout=timeout, json=payload) as response:
+            response.raise_for_status()
+            return await self._stream_openai_tools_response(response, on_delta)
+
     async def chat_with_tools(
         self,
         messages: List[Dict[str, str]],
@@ -188,10 +203,8 @@ class OpenAIAPIClient(LLMClient):
         max_loops: int = 5,
         options: Optional[OpenAIOptions] = None,
         stream: bool = False,
+        on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        if stream:
-            raise ValueError("Streaming not supported by this wrapper.")
-
         advertised = {d["function"]["name"] for d in tools_definitions}
         missing = advertised - tools.keys()
         if missing:
@@ -208,13 +221,18 @@ class OpenAIAPIClient(LLMClient):
                 "model": self.model,
                 "messages": msgs,
                 "tools": tools_definitions,
-                "stream": False,
+                "stream": stream,
                 **opt,
             }
-            assistant_msg = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]
-            tool_calls = assistant_msg.get("tool_calls", [])
 
-            if not tool_calls:                        # finished
+            if stream:
+                content, tool_calls = await self._tools_stream_request(payload, on_delta)
+                assistant_msg: Dict[str, Any] = {"content": content, "tool_calls": tool_calls}
+            else:
+                assistant_msg = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]
+                tool_calls = assistant_msg.get("tool_calls") or []
+
+            if not tool_calls:
                 msgs.append({"role": "assistant", "content": assistant_msg.get("content", "")})
                 return assistant_msg.get("content", "")
 
@@ -226,7 +244,6 @@ class OpenAIAPIClient(LLMClient):
                 }
             )
 
-            # run tools
             for call in tool_calls:
                 name = call["function"]["name"]
                 func = tools[name]
@@ -243,7 +260,7 @@ class OpenAIAPIClient(LLMClient):
                     raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
 
                 content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
-                tool_message = {"role": "tool", "content": content}
+                tool_message: Dict[str, Any] = {"role": "tool", "content": content}
                 tool_call_id = call.get("id")
                 if tool_call_id:
                     tool_message["tool_call_id"] = tool_call_id
