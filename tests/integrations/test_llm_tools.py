@@ -10,30 +10,28 @@ TOOLS_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "add",
-            "description": "Add two integers and return the sum.",
+            "name": "fetch_record",
+            "description": "Retrieve a stored record by its key from the database.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "a": {"type": "integer"},
-                    "b": {"type": "integer"},
+                    "key": {"type": "string", "description": "The record key to look up"},
                 },
-                "required": ["a", "b"],
+                "required": ["key"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "mul",
-            "description": "Multiply two integers and return the product.",
+            "name": "query_index",
+            "description": "Search the index for entries matching a tag and return the count.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "a": {"type": "integer"},
-                    "b": {"type": "integer"},
+                    "tag": {"type": "string", "description": "The tag to search for"},
                 },
-                "required": ["a", "b"],
+                "required": ["tag"],
             },
         },
     },
@@ -47,21 +45,23 @@ async def test_openai_chat_with_tools():
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
     client = OpenAIAPIClient(model=model)
-    called = {"add": False, "mul": False}
+    called = {"fetch_record": False, "query_index": False}
 
-    def _add(a: int, b: int) -> int:
-        called["add"] = True
-        return a + b
+    def _fetch_record(key: str) -> str:
+        called["fetch_record"] = True
+        return "alpha-77"
 
-    def _mul(a: int, b: int) -> int:
-        called["mul"] = True
-        return a * b
+    def _query_index(tag: str) -> int:
+        called["query_index"] = True
+        return 42
+
     messages = [
         {
             "role": "user",
             "content": (
-                "Call add with a=2,b=3 and mul with a=4,b=5. "
-                "Reply with 'ADD=<sum> MUL=<product>'."
+                "Look up the record with key 'usr-991' using fetch_record, "
+                "and search the index for tag 'inv-x' using query_index. "
+                "Reply with 'RECORD=<value> COUNT=<value>'."
             ),
         }
     ]
@@ -69,13 +69,13 @@ async def test_openai_chat_with_tools():
         response = await client.chat_with_tools(
             messages,
             tools_definitions=TOOLS_DEFINITIONS,
-            tools={"add": _add, "mul": _mul},
+            tools={"fetch_record": _fetch_record, "query_index": _query_index},
         )
         assert isinstance(response, str)
-        assert called["add"] is True
-        assert called["mul"] is True
-        assert "5" in response
-        assert "20" in response
+        assert called["fetch_record"] is True
+        assert called["query_index"] is True
+        assert "alpha-77" in response
+        assert "42" in response
 
 
 @pytest.mark.asyncio
@@ -86,24 +86,26 @@ async def test_llamaswap_chat_with_tools():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-9B-heretic.i1-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
 
     client = LlamaSwapAPIClient(model=model, base_url=base_url)
-    called = {"add": False, "mul": False}
+    called = {"fetch_record": False, "query_index": False}
 
-    def _add(a: int, b: int) -> int:
-        called["add"] = True
-        return a + b
+    def _fetch_record(key: str) -> str:
+        called["fetch_record"] = True
+        return "alpha-77"
 
-    def _mul(a: int, b: int) -> int:
-        called["mul"] = True
-        return a * b
+    def _query_index(tag: str) -> int:
+        called["query_index"] = True
+        return 42
+
     messages = [
         {
             "role": "user",
             "content": (
-                "Call add with a=2,b=3 and mul with a=4,b=5. "
-                "Reply with 'ADD=<sum> MUL=<product>'."
+                "Look up the record with key 'usr-991' using fetch_record, "
+                "and search the index for tag 'inv-x' using query_index. "
+                "Reply with 'RECORD=<value> COUNT=<value>'."
             ),
         }
     ]
@@ -111,10 +113,10 @@ async def test_llamaswap_chat_with_tools():
         response = await client.chat_with_tools(
             messages,
             tools_definitions=TOOLS_DEFINITIONS,
-            tools={"add": _add, "mul": _mul},
+            tools={"fetch_record": _fetch_record, "query_index": _query_index},
         )
         assert isinstance(response, str)
-        assert called["add"] is True
-        assert called["mul"] is True
-        assert "5" in response
-        assert "20" in response
+        assert called["fetch_record"] is True
+        assert called["query_index"] is True
+        assert "alpha-77" in response
+        assert "42" in response

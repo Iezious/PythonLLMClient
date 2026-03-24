@@ -228,6 +228,7 @@ class OllamaAPIClient(LLMClient):
         max_loops: int = 5,
         options: Optional[OllamaOptions] = None,
         stream: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         if stream:
             raise ValueError("Streaming not supported by this wrapper.")
@@ -251,6 +252,8 @@ class OllamaAPIClient(LLMClient):
                 "stream": False,
                 "options": opt,
             }
+            if response_format:
+                payload["format"] = "json"
             assistant_msg = (await self._request("POST", "/api/chat", json=payload))["message"]
             tool_calls = assistant_msg.get("tool_calls", [])
 
