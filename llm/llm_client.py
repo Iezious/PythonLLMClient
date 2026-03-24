@@ -285,6 +285,7 @@ class LLMClient:
         options: Optional[Dict[str, Any]] = None,
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         raise NotImplementedError
 

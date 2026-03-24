@@ -204,6 +204,7 @@ class OpenAIAPIClient(LLMClient):
         options: Optional[OpenAIOptions] = None,
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         advertised = {d["function"]["name"] for d in tools_definitions}
         missing = advertised - tools.keys()
@@ -224,6 +225,8 @@ class OpenAIAPIClient(LLMClient):
                 "stream": stream,
                 **opt,
             }
+            if response_format:
+                payload["response_format"] = response_format
 
             if stream:
                 content, tool_calls = await self._tools_stream_request(payload, on_delta)

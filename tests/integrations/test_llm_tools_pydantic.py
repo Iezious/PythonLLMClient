@@ -9,50 +9,61 @@ from llm.llama_swap import LlamaSwapAPIClient
 from llm.openai import OpenAIAPIClient
 from llm.tools import pydantic_to_openai_tool
 
-class AddInput(BaseModel):
-    a: int = Field(..., description="First integer")
-    b: int = Field(..., description="Second integer")
+
+class FetchRecordInput(BaseModel):
+    key: str = Field(..., description="The record key to look up")
 
 
-class MulInput(BaseModel):
-    a: int = Field(..., description="First integer")
-    b: int = Field(..., description="Second integer")
+class QueryIndexInput(BaseModel):
+    tag: str = Field(..., description="The tag to search for")
 
 
 def _build_tools(called: dict) -> tuple[list[dict], dict[str, object]]:
-    def add_impl(a: int, b: int) -> int:
-        called["add"] = True
-        return a + b
+    def fetch_record_impl(key: str) -> str:
+        called["fetch_record"] = True
+        return "alpha-77"
 
-    def mul_impl(a: int, b: int) -> int:
-        called["mul"] = True
-        return a * b
+    def query_index_impl(tag: str) -> int:
+        called["query_index"] = True
+        return 42
 
     tool_defs = [
-        pydantic_to_openai_tool("add", "Add two integers and return the sum.", AddInput),
-        pydantic_to_openai_tool("mul", "Multiply two integers and return the product.", MulInput),
+        pydantic_to_openai_tool("fetch_record", "Retrieve a stored record by its key from the database.", FetchRecordInput),
+        pydantic_to_openai_tool("query_index", "Search the index for entries matching a tag and return the count.", QueryIndexInput),
     ]
-    tool_funcs = {"add": add_impl, "mul": mul_impl}
+    tool_funcs = {"fetch_record": fetch_record_impl, "query_index": query_index_impl}
     return tool_defs, tool_funcs
 
 
 def _build_async_tools(called: dict) -> tuple[list[dict], dict[str, Callable]]:
-    async def add_impl(a: int, b: int) -> int:
+    async def fetch_record_impl(key: str) -> str:
         await asyncio.sleep(0.1)
-        called["add"] = True
-        return a + b
+        called["fetch_record"] = True
+        return "alpha-77"
 
-    async def mul_impl(a: int, b: int) -> int:
+    async def query_index_impl(tag: str) -> int:
         await asyncio.sleep(0.1)
-        called["mul"] = True
-        return a * b
+        called["query_index"] = True
+        return 42
 
     tool_defs = [
-        pydantic_to_openai_tool("add", "Add two integers and return the sum.", AddInput),
-        pydantic_to_openai_tool("mul", "Multiply two integers and return the product.", MulInput),
+        pydantic_to_openai_tool("fetch_record", "Retrieve a stored record by its key from the database.", FetchRecordInput),
+        pydantic_to_openai_tool("query_index", "Search the index for entries matching a tag and return the count.", QueryIndexInput),
     ]
-    tool_funcs = {"add": add_impl, "mul": mul_impl}
+    tool_funcs = {"fetch_record": fetch_record_impl, "query_index": query_index_impl}
     return tool_defs, tool_funcs
+
+
+MESSAGES = [
+    {
+        "role": "user",
+        "content": (
+            "Look up the record with key 'usr-991' using fetch_record, "
+            "and search the index for tag 'inv-x' using query_index. "
+            "Reply with 'RECORD=<value> COUNT=<value>'."
+        ),
+    }
+]
 
 
 @pytest.mark.asyncio
@@ -62,28 +73,19 @@ async def test_openai_chat_with_tools_pydantic():
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
     client = OpenAIAPIClient(model=model)
-    called = {"add": False, "mul": False}
+    called = {"fetch_record": False, "query_index": False}
     tool_defs, tool_funcs = _build_tools(called)
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "Call add with a=2,b=3 and mul with a=4,b=5. "
-                "Reply with 'ADD=<sum> MUL=<product>'."
-            ),
-        }
-    ]
     async with client:
         response = await client.chat_with_tools(
-            messages,
+            MESSAGES,
             tools_definitions=tool_defs,
             tools=tool_funcs,
         )
         assert isinstance(response, str)
-        assert called["add"] is True
-        assert called["mul"] is True
-        assert "5" in response
-        assert "20" in response
+        assert called["fetch_record"] is True
+        assert called["query_index"] is True
+        assert "alpha-77" in response
+        assert "42" in response
 
 
 @pytest.mark.asyncio
@@ -94,31 +96,22 @@ async def test_llamaswap_chat_with_tools_pydantic():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-9B-heretic.i1-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
 
     client = LlamaSwapAPIClient(model=model, base_url=base_url)
-    called = {"add": False, "mul": False}
+    called = {"fetch_record": False, "query_index": False}
     tool_defs, tool_funcs = _build_tools(called)
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "Call add with a=2,b=3 and mul with a=4,b=5. "
-                "Reply with 'ADD=<sum> MUL=<product>'."
-            ),
-        }
-    ]
     async with client:
         response = await client.chat_with_tools(
-            messages,
+            MESSAGES,
             tools_definitions=tool_defs,
             tools=tool_funcs,
         )
         assert isinstance(response, str)
-        assert called["add"] is True
-        assert called["mul"] is True
-        assert "5" in response
-        assert "20" in response
+        assert called["fetch_record"] is True
+        assert called["query_index"] is True
+        assert "alpha-77" in response
+        assert "42" in response
 
 
 @pytest.mark.asyncio
@@ -128,28 +121,19 @@ async def test_openai_chat_with_async_tools_pydantic():
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
     client = OpenAIAPIClient(model=model)
-    called = {"add": False, "mul": False}
+    called = {"fetch_record": False, "query_index": False}
     tool_defs, tool_funcs = _build_async_tools(called)
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "Call add with a=2,b=3 and mul with a=4,b=5. "
-                "Reply with 'ADD=<sum> MUL=<product>'."
-            ),
-        }
-    ]
     async with client:
         response = await client.chat_with_tools(
-            messages,
+            MESSAGES,
             tools_definitions=tool_defs,
             tools=tool_funcs,
         )
         assert isinstance(response, str)
-        assert called["add"] is True
-        assert called["mul"] is True
-        assert "5" in response
-        assert "20" in response
+        assert called["fetch_record"] is True
+        assert called["query_index"] is True
+        assert "alpha-77" in response
+        assert "42" in response
 
 
 @pytest.mark.asyncio
@@ -160,28 +144,19 @@ async def test_llamaswap_chat_with_async_tools_pydantic():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-9B-heretic.i1-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
 
     client = LlamaSwapAPIClient(model=model, base_url=base_url)
-    called = {"add": False, "mul": False}
+    called = {"fetch_record": False, "query_index": False}
     tool_defs, tool_funcs = _build_async_tools(called)
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "Call add with a=2,b=3 and mul with a=4,b=5. "
-                "Reply with 'ADD=<sum> MUL=<product>'."
-            ),
-        }
-    ]
     async with client:
         response = await client.chat_with_tools(
-            messages,
+            MESSAGES,
             tools_definitions=tool_defs,
             tools=tool_funcs,
         )
         assert isinstance(response, str)
-        assert called["add"] is True
-        assert called["mul"] is True
-        assert "5" in response
-        assert "20" in response
+        assert called["fetch_record"] is True
+        assert called["query_index"] is True
+        assert "alpha-77" in response
+        assert "42" in response
