@@ -115,6 +115,60 @@ reply = await client.chat_with_tools(
 )
 ```
 
+### Tool Calling with JSON Output
+
+Combine tool use with structured JSON output by passing `response_format`. The format is applied to the API payload so the final response (after all tool calls complete) is constrained to valid JSON.
+
+```python
+# Basic JSON mode — guarantees valid JSON, no schema enforcement
+reply = await client.chat_with_tools(
+    messages,
+    tools_definitions=tools_defs,
+    tools={"get_weather": get_weather},
+    response_format={"type": "json_object"},
+)
+
+# Structured outputs — guarantees JSON conforming to a schema
+reply = await client.chat_with_tools(
+    messages,
+    tools_definitions=tools_defs,
+    tools={"get_weather": get_weather},
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "weather_report",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                    "temp": {"type": "string"},
+                },
+                "required": ["city", "temp"],
+            },
+        },
+    },
+)
+```
+
+Works with streaming too — `on_delta` fires for content tokens and the final result is valid JSON:
+
+```python
+reply = await client.chat_with_tools(
+    messages,
+    tools_definitions=tools_defs,
+    tools={"get_weather": get_weather},
+    stream=True,
+    on_delta=handle_delta,
+    response_format={"type": "json_object"},
+)
+```
+
+| Backend | `json_object` | `json_schema` | Notes |
+| --------- | :-----------: | :-----------: | ------- |
+| OpenAI | Yes | Yes | Full support |
+| llama-swap | Yes | Yes | Depends on underlying engine (vLLM, llama.cpp) |
+| Ollama | Yes | -- | Translated to `format="json"` internally |
+
 ### Embeddings
 
 ```python
