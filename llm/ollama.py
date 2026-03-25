@@ -147,7 +147,14 @@ class OllamaAPIClient(LLMClient):
         if system:
             payload["system"] = system
 
-        return (await self._request("POST", "/api/generate", json=payload))["response"]
+        with self._tracer.trace("generate", self.model) as t:
+            t.log_system(system)
+            t.log_messages([{"role": "user", "content": prompt}])
+            t.log_request("POST", "/api/generate", payload)
+            result = (await self._request("POST", "/api/generate", json=payload))["response"]
+            t.log_response(result)
+
+        return result
 
     # chat (messages array)
     async def chat(
@@ -173,10 +180,16 @@ class OllamaAPIClient(LLMClient):
             "stream": False,
             "options": opt,
         }
-        response = await self._request("POST", "/api/chat", json=payload)
 
-        # This is the only place Ollama returns a dict instead of a string
-        return response["message"]["content"]
+        with self._tracer.trace("chat", self.model) as t:
+            t.log_system(system)
+            t.log_messages(msgs)
+            t.log_request("POST", "/api/chat", payload)
+            response = await self._request("POST", "/api/chat", json=payload)
+            result = response["message"]["content"]
+            t.log_response(result)
+
+        return result
 
     async def chat_json(
         self,
@@ -203,16 +216,19 @@ class OllamaAPIClient(LLMClient):
             "format": "json",
             "options": opt,
         }
-        response = await self._request("POST", "/api/chat", json=payload)
 
-        # The response content is already a string, but it should be a JSON string
-        response_content = response["message"]["content"]
+        with self._tracer.trace("chat_json", self.model) as t:
+            t.log_system(system)
+            t.log_messages(msgs)
+            t.log_request("POST", "/api/chat", payload)
+            response = await self._request("POST", "/api/chat", json=payload)
+            response_content = response["message"]["content"]
+            t.log_response(response_content)
 
         # Basic validation that the response is valid JSON
         try:
             json.loads(response_content)
         except json.JSONDecodeError:
-            # Raise a specific error if the JSON is malformed
             raise LLMError("LLM response was not valid JSON, despite requesting JSON mode.")
 
         return response_content
@@ -244,39 +260,49 @@ class OllamaAPIClient(LLMClient):
         if system:
             msgs.insert(0, {"role": "system", "content": system})
 
-        for _ in range(max_loops):
-            payload = {
-                "model": self.model,
-                "messages": msgs,
-                "tools": tools_definitions,
-                "stream": False,
-                "options": opt,
-            }
-            if response_format:
-                payload["format"] = "json"
-            assistant_msg = (await self._request("POST", "/api/chat", json=payload))["message"]
-            tool_calls = assistant_msg.get("tool_calls", [])
+        with self._tracer.trace("chat_with_tools", self.model) as t:
+            t.log_system(system)
+            t.log_messages(msgs)
 
-            if not tool_calls:                        # finished
-                msgs.append({"role": "assistant", "content": assistant_msg["content"]})
-                return assistant_msg["content"]
+            for loop_idx in range(max_loops):
+                payload = {
+                    "model": self.model,
+                    "messages": msgs,
+                    "tools": tools_definitions,
+                    "stream": False,
+                    "options": opt,
+                }
+                if response_format:
+                    payload["format"] = "json"
 
-            # run tools
-            for call in tool_calls:
-                name = call["function"]["name"]
-                func = tools[name]
-                kwargs = call["function"].get("arguments") or {}
-                if not all(k in inspect.signature(func).parameters for k in kwargs):
-                    raise ValueError(f"Bad args for tool '{name}': {kwargs}")
-                try:
-                    result = func(**kwargs)
-                    if inspect.isawaitable(result):
-                        result = await result
-                except Exception as exc:
-                    raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
+                t.log_request("POST", f"/api/chat (loop {loop_idx})", payload)
+                assistant_msg = (await self._request("POST", "/api/chat", json=payload))["message"]
+                tool_calls = assistant_msg.get("tool_calls", [])
 
-                content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
-                msgs.append({"role": "tool", "name": name, "content": content})
+                if not tool_calls:                        # finished
+                    final = assistant_msg["content"]
+                    msgs.append({"role": "assistant", "content": final})
+                    t.log_response(final)
+                    return final
+
+                # run tools
+                for call in tool_calls:
+                    name = call["function"]["name"]
+                    func = tools[name]
+                    kwargs = call["function"].get("arguments") or {}
+                    t.log_tool_call(name, kwargs)
+                    if not all(k in inspect.signature(func).parameters for k in kwargs):
+                        raise ValueError(f"Bad args for tool '{name}': {kwargs}")
+                    try:
+                        result = func(**kwargs)
+                        if inspect.isawaitable(result):
+                            result = await result
+                    except Exception as exc:
+                        raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
+
+                    content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+                    t.log_tool_result(name, content)
+                    msgs.append({"role": "tool", "name": name, "content": content})
 
         raise RuntimeError("Tool loop exceeded max_loops -- possible infinite cycle.")
 
@@ -294,25 +320,32 @@ class OllamaAPIClient(LLMClient):
             "options": opt,
         }
 
-        try:
-            response = await self._request("POST", "/api/embed", json=payload)
-            if "embeddings" not in response:
-                raise LLMError(f"Invalid response from Ollama embed endpoint: {response}")
-            return response["embeddings"]
-        except LLMError as exc:
-            if "status 404" not in str(exc):
-                raise
+        with self._tracer.trace("embed_batch", self.model) as t:
+            t.log_request("POST", "/api/embed", payload)
 
-        vectors: List[List[float]] = []
-        for text in texts:
-            single_payload = {
-                "model": self.model,
-                "prompt": text,
-                "options": opt,
-            }
-            response = await self._request("POST", "/api/embeddings", json=single_payload)
-            if "embedding" not in response:
-                raise LLMError(f"Invalid response from Ollama embeddings endpoint: {response}")
-            vectors.append(response["embedding"])
+            try:
+                response = await self._request("POST", "/api/embed", json=payload)
+                if "embeddings" not in response:
+                    raise LLMError(f"Invalid response from Ollama embed endpoint: {response}")
+                t.log_response(f"{len(response['embeddings'])} embeddings returned")
+                return response["embeddings"]
+            except LLMError as exc:
+                if "status 404" not in str(exc):
+                    raise
+
+            t.log_response("Falling back to /api/embeddings (per-text)")
+            vectors: List[List[float]] = []
+            for text in texts:
+                single_payload = {
+                    "model": self.model,
+                    "prompt": text,
+                    "options": opt,
+                }
+                response = await self._request("POST", "/api/embeddings", json=single_payload)
+                if "embedding" not in response:
+                    raise LLMError(f"Invalid response from Ollama embeddings endpoint: {response}")
+                vectors.append(response["embedding"])
+
+            t.log_response(f"{len(vectors)} embeddings returned (fallback)")
 
         return vectors

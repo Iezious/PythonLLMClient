@@ -92,18 +92,38 @@ class LlamaSwapAPIClient(LLMClient):
             "stream": stream,
             **opt,
         }
-        if not stream:
-            return (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
 
-        session = await self._ensure_session()
-        url = f"{self.base_url}/chat/completions"
-        headers = {}
-        if self.bearer_token:
-            headers["Authorization"] = f"Bearer {self.bearer_token}"
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with session.post(url, headers=headers, timeout=timeout, json=payload) as response:
-            response.raise_for_status()
-            return await self._stream_openai_chat_response(response, on_delta)
+        with self._tracer.trace("chat", self.model) as t:
+            t.log_system(system)
+            t.log_messages(msgs)
+            t.log_request("POST", "/chat/completions", payload)
+
+            if not stream:
+                result = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
+                t.log_response(result)
+                return result
+
+            session = await self._ensure_session()
+            url = f"{self.base_url}/chat/completions"
+            headers = {}
+            if self.bearer_token:
+                headers["Authorization"] = f"Bearer {self.bearer_token}"
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+
+            _orig_delta = on_delta
+
+            async def _tracing_delta(text: str) -> None:
+                t.log_chunk(text)
+                if _orig_delta:
+                    result = _orig_delta(text)
+                    if inspect.isawaitable(result):
+                        await result
+
+            async with session.post(url, headers=headers, timeout=timeout, json=payload) as response:
+                response.raise_for_status()
+                result = await self._stream_openai_chat_response(response, _tracing_delta if self._tracer.enabled else on_delta)
+                t.log_response(result)
+                return result
 
     async def generate(
         self,
@@ -145,7 +165,12 @@ class LlamaSwapAPIClient(LLMClient):
             **opt,
         }
 
-        response_content = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
+        with self._tracer.trace("chat_json", self.model) as t:
+            t.log_system(system)
+            t.log_messages(msgs)
+            t.log_request("POST", "/chat/completions", payload)
+            response_content = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
+            t.log_response(response_content)
 
         if response_schema:
             try:
@@ -197,57 +222,67 @@ class LlamaSwapAPIClient(LLMClient):
         if system:
             msgs.insert(0, {"role": "system", "content": system})
 
-        for _ in range(max_loops):
-            payload = {
-                "model": self.model,
-                "messages": msgs,
-                "tools": tools_definitions,
-                "stream": stream,
-                **opt,
-            }
-            if response_format:
-                payload["response_format"] = response_format
+        with self._tracer.trace("chat_with_tools", self.model) as t:
+            t.log_system(system)
+            t.log_messages(msgs)
 
-            if stream:
-                content, tool_calls = await self._tools_stream_request(payload, on_delta)
-                assistant_msg: Dict[str, Any] = {"content": content, "tool_calls": tool_calls}
-            else:
-                assistant_msg = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]
-                tool_calls = assistant_msg.get("tool_calls") or []
-
-            if not tool_calls:
-                msgs.append({"role": "assistant", "content": assistant_msg.get("content", "")})
-                return assistant_msg.get("content", "")
-
-            msgs.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_msg.get("content", ""),
-                    "tool_calls": tool_calls,
+            for loop_idx in range(max_loops):
+                payload = {
+                    "model": self.model,
+                    "messages": msgs,
+                    "tools": tools_definitions,
+                    "stream": stream,
+                    **opt,
                 }
-            )
+                if response_format:
+                    payload["response_format"] = response_format
 
-            for call in tool_calls:
-                name = call["function"]["name"]
-                func = tools[name]
-                kwargs = call["function"].get("arguments") or {}
-                if isinstance(kwargs, str):
-                    kwargs = json.loads(kwargs)
-                if not all(k in inspect.signature(func).parameters for k in kwargs):
-                    raise ValueError(f"Bad args for tool '{name}': {kwargs}")
-                try:
-                    result = func(**kwargs)
-                    if inspect.isawaitable(result):
-                        result = await result
-                except Exception as exc:
-                    raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
+                t.log_request("POST", f"/chat/completions (loop {loop_idx})", payload)
 
-                content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
-                tool_message: Dict[str, Any] = {"role": "tool", "content": content}
-                tool_call_id = call.get("id")
-                if tool_call_id:
-                    tool_message["tool_call_id"] = tool_call_id
-                msgs.append(tool_message)
+                if stream:
+                    content, tool_calls = await self._tools_stream_request(payload, on_delta)
+                    assistant_msg: Dict[str, Any] = {"content": content, "tool_calls": tool_calls}
+                else:
+                    assistant_msg = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]
+                    tool_calls = assistant_msg.get("tool_calls") or []
+
+                if not tool_calls:
+                    final = assistant_msg.get("content", "")
+                    msgs.append({"role": "assistant", "content": final})
+                    t.log_response(final)
+                    return final
+
+                msgs.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_msg.get("content", ""),
+                        "tool_calls": tool_calls,
+                    }
+                )
+
+                for call in tool_calls:
+                    name = call["function"]["name"]
+                    func = tools[name]
+                    kwargs = call["function"].get("arguments") or {}
+                    if isinstance(kwargs, str):
+                        kwargs = json.loads(kwargs)
+                    t.log_tool_call(name, kwargs)
+                    if not all(k in inspect.signature(func).parameters for k in kwargs):
+                        raise ValueError(f"Bad args for tool '{name}': {kwargs}")
+                    try:
+                        result = func(**kwargs)
+                        if inspect.isawaitable(result):
+                            result = await result
+                    except Exception as exc:
+                        raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
+
+                    content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+                    t.log_tool_result(name, content)
+                    tool_message: Dict[str, Any] = {"role": "tool", "content": content}
+                    tool_call_id = call.get("id")
+                    if tool_call_id:
+                        tool_message["tool_call_id"] = tool_call_id
+                    msgs.append(tool_message)
 
         raise RuntimeError("Tool loop exceeded max_loops -- possible infinite cycle.")
 
@@ -269,8 +304,11 @@ class LlamaSwapAPIClient(LLMClient):
         if user:
             payload["user"] = user
 
-        response = await self._request("POST", "/embeddings", json=payload)
-        if "data" not in response:
-            raise LLMError(f"Invalid response from llama-swap when embedding: {response}")
+        with self._tracer.trace("embed_batch", self.model) as t:
+            t.log_request("POST", "/embeddings", payload)
+            response = await self._request("POST", "/embeddings", json=payload)
+            if "data" not in response:
+                raise LLMError(f"Invalid response from llama-swap when embedding: {response}")
+            t.log_response(f"{len(response['data'])} embeddings returned")
 
         return [item["embedding"] for item in response["data"]]

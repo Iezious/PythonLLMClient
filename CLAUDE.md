@@ -17,6 +17,7 @@ llm/                  # Main package (all source lives here)
   openai.py           # OpenAIAPIClient
   llama_swap.py       # LlamaSwapAPIClient
   tools.py            # pydantic_to_openai_tool helper
+  trace.py            # LLMTracer — env-driven trace logging for LLM interactions
   llm.py              # Factory function + placeholder utilities
 tests/                # Test directory (pytest + pytest-asyncio)
 pyproject.toml        # Build config, dependencies, tool settings
