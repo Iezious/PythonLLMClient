@@ -9,6 +9,7 @@ from .openai import OpenAIAPIClient
 from .llama_swap import LlamaSwapAPIClient
 from .llm import get_llm_client, substitute_placeholders
 from .tools import pydantic_to_openai_tool
+from .trace import LLMTracer
 
 __all__ = [
     "__version__",
@@ -20,4 +21,5 @@ __all__ = [
     "get_llm_client",
     "substitute_placeholders",
     "pydantic_to_openai_tool",
+    "LLMTracer",
 ]

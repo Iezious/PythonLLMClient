@@ -6,6 +6,7 @@ import aiohttp
 from llm.exceptions import LLMError
 from llm.message import LLMMessage
 from llm.options import BaseLLMOptions
+from llm.trace import LLMTracer
 
 
 class LLMClient:
@@ -17,6 +18,7 @@ class LLMClient:
         self.timeout = timeout
         self.bearer_token = bearer_token
         self.default_options = default_options
+        self._tracer = LLMTracer()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure session is created."""
