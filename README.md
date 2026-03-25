@@ -209,15 +209,24 @@ llm/
   ollama.py         # OllamaAPIClient
   openai.py         # OpenAIAPIClient
   llama_swap.py     # LlamaSwapAPIClient
+  trace.py          # LLMTracer — debug trace logging
   llm.py            # Factory (get_llm_client) + utilities
 ```
 
 ## Environment Variables
 
 | Variable | Used By | Purpose |
-|----------|---------|---------|
+| -------- | ------- | ------- |
 | `OPENAI_API_KEY` | `OpenAIAPIClient` | API authentication |
 | `OPEN_AI_KEY` | `OpenAIAPIClient` | Alternative API key variable |
+| `LLM_TRACE` | All clients | Enable trace logging (`1`, `true`, or `on`) |
+| `LLM_TRACE_FOLDER` | All clients | Directory for trace log files |
+
+### Debug Trace Logging
+
+Set both `LLM_TRACE=1` and `LLM_TRACE_FOLDER=/path/to/traces` to write a human-readable log file for every LLM interaction. Each file captures system prompts, message history, request payloads, streaming chunks, tool calls, tool results, and responses.
+
+Files are written to `<LLM_TRACE_FOLDER>/<YYYY-MM-DD>/llm-trace-<YYYYMMDD-HHMMSSffffff>.log`. When disabled (default), tracing has zero overhead.
 
 ## License
 
