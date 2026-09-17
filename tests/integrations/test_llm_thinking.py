@@ -87,6 +87,78 @@ async def test_llamaswap_thinking_tags_well_formed():
     assert_think_tags_well_formed(full_response)
 
 
+@pytest.mark.asyncio
+async def test_llamaswap_thinking_streaming_with_tools():
+    """chat_with_tools(stream=True) must stream <think>-wrapped reasoning too.
+
+    The reasoning is deliberately absent from the returned content, which is conversation
+    history re-sent to the model; it only reaches the caller via on_delta.
+    """
+    base_url = (
+        os.environ.get("LLAMA_SWITCH_URL")
+        or os.environ.get("LLAMA_SWAP_BASE_URL")
+        or "http://india.loc:9292/v1"
+    )
+
+    model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+
+    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+
+    tools_definitions = [
+        {
+            "type": "function",
+            "function": {
+                "name": "multiply",
+                "description": "Multiply two integers and return the product.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "b": {"type": "integer"},
+                    },
+                    "required": ["a", "b"],
+                },
+            },
+        }
+    ]
+
+    called = {"multiply": False}
+
+    def _multiply(a: int, b: int) -> int:
+        called["multiply"] = True
+        return a * b
+
+    chunks: list[str] = []
+
+    async def on_delta(delta: str):
+        chunks.append(delta)
+
+    messages = [
+        {
+            "role": "user",
+            "content": "Use the multiply tool to compute 15 * 37, then state the result.",
+        }
+    ]
+
+    async with client:
+        response = await client.chat_with_tools(
+            messages,
+            tools_definitions=tools_definitions,
+            tools={"multiply": _multiply},
+            stream=True,
+            on_delta=on_delta,
+            options={"enable_thinking": True},
+        )
+
+    streamed = "".join(chunks)
+    assert called["multiply"] is True
+    assert "<think>" in streamed, "Tool-calling stream should contain <think> opening tag"
+    assert "</think>" in streamed, "Tool-calling stream should contain </think> closing tag"
+    assert_think_tags_well_formed(streamed)
+    assert "<think>" not in response, "Returned content must stay free of reasoning tags"
+    assert "555" in response
+
+
 # ── OpenAI ──────────────────────────────────────────────────────────────────
 
 

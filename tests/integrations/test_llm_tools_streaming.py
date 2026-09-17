@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 
@@ -36,6 +37,27 @@ TOOLS_DEFINITIONS = [
         },
     },
 ]
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> blocks.
+
+    chat_with_tools streams reasoning through on_delta but deliberately keeps it out of the
+    returned content, so the streamed text is the returned content plus think blocks.
+    """
+    return _THINK_BLOCK.sub("", text)
+
+
+def assert_think_tags_well_formed(text: str) -> None:
+    """If <think> tags are present, verify they are properly matched and ordered."""
+    open_count = text.count("<think>")
+    close_count = text.count("</think>")
+    assert open_count == close_count, f"Mismatched think tags: {open_count} open, {close_count} close"
+    if open_count > 0:
+        assert text.index("<think>") < text.index("</think>"), "<think> should come before </think>"
 
 
 @pytest.mark.asyncio
@@ -84,7 +106,10 @@ async def test_openai_chat_with_tools_streaming():
     assert "alpha-77" in response
     assert "42" in response
     assert len(chunks) > 1, "Final answer should be streamed in multiple chunks"
-    assert "".join(chunks) == response
+    streamed = "".join(chunks)
+    assert_think_tags_well_formed(streamed)
+    # Reasoning is streamed but intentionally excluded from the returned content
+    assert strip_think_blocks(streamed).endswith(response)
 
 
 @pytest.mark.asyncio
@@ -137,4 +162,7 @@ async def test_llamaswap_chat_with_tools_streaming():
     assert "alpha-77" in response
     assert "42" in response
     assert len(chunks) > 1, "Final answer should be streamed in multiple chunks"
-    assert "".join(chunks) == response
+    streamed = "".join(chunks)
+    assert_think_tags_well_formed(streamed)
+    # Reasoning is streamed but intentionally excluded from the returned content
+    assert strip_think_blocks(streamed).endswith(response)

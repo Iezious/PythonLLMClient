@@ -236,9 +236,26 @@ class LLMClient:
 
         Accumulates tool_call deltas by index and calls on_delta for content chunks.
         Returns (content, tool_calls) where tool_calls is empty for final answer rounds.
+
+        `reasoning_content` deltas are streamed through on_delta wrapped in <think>/</think>
+        tags, exactly as _stream_openai_chat_response does. Unlike that method, the reasoning
+        text is deliberately NOT part of the returned content string: chat_with_tools feeds
+        the return value back into `messages` as the assistant turn for the next loop
+        iteration, and re-sending the model's own thinking wastes context and is rejected or
+        mishandled by some servers. This asymmetry is intentional -- do not "fix" it.
+
+        The in_reasoning state is per call (i.e. per tool-calling round), not shared across
+        the chat_with_tools loop.
         """
         content_chunks: List[str] = []
         tool_call_map: Dict[int, dict] = {}
+        in_reasoning = False
+
+        async def emit(text: str) -> None:
+            if on_delta:
+                result = on_delta(text)
+                if inspect.isawaitable(result):
+                    await result
 
         async for data in self._iter_sse_data(response):
             if data == "[DONE]":
@@ -252,6 +269,8 @@ class LLMClient:
                 continue
             delta = choices[0].get("delta") or {}
 
+            # Tool calls first and unconditionally: a single delta may carry both
+            # reasoning_content and tool_calls, so reasoning must not short-circuit this.
             for tc in delta.get("tool_calls") or []:
                 idx = tc.get("index", 0)
                 if idx not in tool_call_map:
@@ -265,13 +284,28 @@ class LLMClient:
                 if func.get("arguments"):
                     entry["function"]["arguments"] += func["arguments"]
 
+            # Emit reasoning_content wrapped in <think> tags (streamed only, not returned)
+            reasoning = delta.get("reasoning_content")
+            if reasoning:
+                if not in_reasoning:
+                    in_reasoning = True
+                    await emit("<think>" + reasoning)
+                else:
+                    await emit(reasoning)
+
             content = delta.get("content")
             if content:
                 content_chunks.append(content)
-                if on_delta:
-                    result = on_delta(content)
-                    if inspect.isawaitable(result):
-                        await result
+                text = content
+                if in_reasoning:
+                    in_reasoning = False
+                    text = "</think>" + content
+                await emit(text)
+
+        # Close unclosed thinking tag: a round may end with reasoning plus tool_calls only
+        if in_reasoning:
+            in_reasoning = False
+            await emit("</think>")
 
         tool_calls = [tool_call_map[i] for i in sorted(tool_call_map)]
         return "".join(content_chunks), tool_calls
