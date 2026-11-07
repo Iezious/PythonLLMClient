@@ -18,7 +18,7 @@
 - **generation settings / setting alias** — per-client and per-call values that steer how the model writes a reply (randomness, length cap, penalties, thinking), and another name a backend accepts for a setting.
 - **trace / trace record** — readable per-call log of an LLM interaction; a debugging aid in plain, unredacted text, best-effort.
 - **prompt template / placeholder** — prompt text with named slots written in double braces, and a slot to be replaced by a value.
-- **client** — what an app builds for one backend, address and model; all calls go through it.
+- **client** — what an app builds for one backend, address, model and chat protocol; all calls go through it.
 - **backend kind** — the name an app uses to pick a backend when building a client.
 - **usage scope** — the span between opening and closing a client; closing it releases the connection to the server.
 - **credential** — the secret a backend may require to accept requests; required for OpenAI, optional for llama-swap; always provided by the app.
@@ -40,5 +40,9 @@
 - **trace folder** — the folder the developer names for trace records, grouped by day.
 - **repeated filling** — filling slots that appear inside inserted values, in turn.
 - **computed value** — a template value worked out only when its slot is filled.
+- **chat protocol** — how a client talks with the server for chat operations: Responses or chat completions, chosen when building the client.
+- **Responses protocol** — the default chat protocol.
+- **chat completions** — the chat protocol kept for compatibility with servers that do not offer Responses.
+- **reasoning summary** — OpenAI's summary of its hidden reasoning.
 </auto-generated>
 <!-- product-spec:end -->

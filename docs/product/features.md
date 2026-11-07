@@ -8,7 +8,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 - **Purpose:** Build a client for one registry entry (backend kind, address, credential, model); the app provides the credential; apps keep their own registry and pick one per conversation. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
 - **Rule:**
-  - One client serves exactly one backend, address and model; to use another model or server the app builds another client.
+  - One client serves exactly one backend, address, model and chat protocol (FEAT-014); to use another model, server or protocol the app builds another client.
   - The OpenAI backend cannot be used without a credential. The app provides the credential when building the client; the library never takes a credential from the environment on its own (the app may read it from wherever it likes).
   - Only the supported backend kinds are accepted, by their exact names.
   - Ollama as a backend choice is deprecated.
@@ -26,6 +26,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Rules (one model per client, exact names) and gaps (Ollama warning, usage-scope release): `[confirmed: user]` interview "I-01 — FEAT-001 Connect to a chosen backend" (2026-11-07)
   - Credential rule and defect gap: `[confirmed: user]` interview "I-01 — wave-1 checkpoint (CORRECTION)" (2026-11-07); supersedes the earlier environment-credential answer
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+  - Rule (one chat protocol per client): `[confirmed: user]` interview "Delta — Responses protocol" (2026-11-07)
   - Rules (parallel calls, time limit, default address): `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - Load-after-install defect gap: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - Ollama deprecated: `[confirmed: user]` interview "2026-11-07 — Vision discussion"
@@ -73,13 +74,14 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 - **Realized by:** UC-005; US-008, US-013, US-021, US-022, US-023, US-024, US-036
 - **Gap:**
   - _TBD: apps need a stream they can consume incrementally and stop early, with answer text, reasoning and tool-call fragments as separate parts — not yet supported_
-  - _TBD: defect — an error the server sends inside a stream, or a stream that ends early, must be reported as an error; today the app gets partial or empty text silently_
+  - _TBD: defect — an error the server sends inside a stream, or a stream that ends early, must be reported as an error; today the app gets partial or empty text silently — to be met on the Responses protocol (FEAT-014); open for chat completions_
   - _TBD: defect — streamed text must arrive complete: non-English characters and replies from servers that end lines differently or split one piece over several lines currently lose text_
 - **Source:**
   - `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
   - Defect gap: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
   - Receiver rules, tool-conversation streaming, JSON out of scope: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - Complete-text defect gap: `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
+  - Stream-error gap annotation (Responses): `[confirmed: user]` interview "challenges — Responses delta" (2026-11-07), C3
 
 ### FEAT-005 — See the model's reasoning
 - **Purpose:** Ask for model reasoning in one backend-neutral way and receive it when streaming. · **Actors:** ACT-001, ACT-002 · **Priority:** must
@@ -88,13 +90,14 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - One backend-neutral thinking switch.
   - Reasoning is shown only while streaming, marked off as reasoning.
   - A streamed plain chat returns the reasoning together with the answer, exactly as streamed.
-  - A tool conversation returns its answer without reasoning and does not send earlier reasoning back to the model; this holds for reasoning the server reports separately from the answer. Reasoning the server writes directly into the answer text is returned and sent back as part of the answer (accepted).
+  - Within one tool conversation the library sends each round's reasoning back to the server when the protocol needs it (Responses); reasoning never enters the app's conversation; finished history carries answers only; the call returns the final answer without reasoning. On chat completions earlier reasoning the server reports separately is not sent back. Reasoning the server writes directly into the answer text is returned and sent back as part of the answer (accepted).
+  - When thinking is on, the library asks for the reasoning the server offers (on OpenAI: its reasoning summary).
 - **Delivered:** legacy
-- **Realized by:** UC-006; US-025, US-026, US-027, US-028
+- **Realized by:** UC-006; US-025, US-026, US-027, US-028, US-058, US-059
 - **Gap:**
-  - _TBD: reasoning delivered separately from the answer text while streaming (today both arrive mixed in one stream of text) — not yet supported_
-  - _TBD: defect — turning thinking off on OpenAI must ask for the lowest reasoning effort; today it sends nothing and a reasoning model still reasons_
-  - _TBD: llama-swap should pass an explicit reasoning effort to the server — not yet supported_
+  - _TBD: reasoning delivered separately from the answer text while streaming (today both arrive mixed in one stream of text) — not yet supported — to be met on the Responses protocol (FEAT-014); open for chat completions_
+  - _TBD: defect — turning thinking off on OpenAI must ask for the lowest reasoning effort; today it sends nothing and a reasoning model still reasons — to be met on the Responses protocol (FEAT-014); open for chat completions_
+  - _TBD: llama-swap should pass an explicit reasoning effort to the server — not yet supported — to be met on the Responses protocol (FEAT-014); open for chat completions_
   - _TBD: verify that turning thinking off on llama-swap actually stops reasoning — unverified_
   - _TBD: defect — in a streamed plain chat, a piece that carries both reasoning and answer text loses the answer text_
 - **Source:**
@@ -102,6 +105,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Rules (marked off, streamed chat returns reasoning) and gaps: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - Tool-conversation rule (separate reasoning): behaviour per deep-docs notes I-05
   - Tool-conversation exception (server-inlined reasoning returned and re-sent): `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07) (not selected as a defect)
+  - Reasoning sent back within a tool conversation on Responses, reasoning asked for when thinking is on, gaps met on Responses: `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
 
 ### FEAT-006 — Get JSON-only answers
 - **Purpose:** Ask for an answer that is JSON only; invalid JSON is reported as an error when the reply is checked. · **Actors:** ACT-001, ACT-002 · **Priority:** must
@@ -133,7 +137,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - A requested answer format applies to every round of the conversation.
   - The final answer is not checked against the requested format (accepted).
 - **Delivered:** legacy
-- **Realized by:** UC-007; US-023, US-027, US-030, US-031, US-032, US-033, US-034, US-035, US-037
+- **Realized by:** UC-007; US-023, US-027, US-030, US-031, US-032, US-033, US-034, US-035, US-037, US-058
 - **Gap:**
   - _TBD: the app can observe each tool call and its result as it happens — not yet supported_
   - _TBD: defect — when the round limit is reached, the error must say the round limit was the reason_
@@ -243,12 +247,29 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 - **Status:** withdrawn — retired by the user; the command-line smoke test is no longer part of the product
 - **Source:** `[confirmed: user]` interview "deep-docs scope round" (2026-11-07), Retire
 
+### FEAT-014 — Choose the server's chat protocol
+- **Purpose:** The app chooses, when building a client, which chat protocol the client speaks with the server — the Responses protocol (default) or chat completions (kept for compatibility with servers that do not offer Responses). · **Actors:** ACT-001, ACT-002 · **Priority:** must
+- **Status:** planned
+- **Rule:**
+  - The protocol is chosen by the app when building the client; it is never guessed from the address and the library never switches on its own.
+  - The default is the Responses protocol. Chat completions is kept only for servers that do not offer Responses (accepted: a client built without a choice against such a server fails after upgrading — intended).
+  - The choice is offered on OpenAI and llama-swap, not on the deprecated Ollama: building an Ollama client with an explicitly requested protocol is refused, naming the reason.
+  - Every chat operation follows the chosen protocol — chat, generate, JSON-only answers, tool conversations, streamed and not; embeddings and model listing are unaffected.
+  - Each chat operation gives the app the same kind of result on both protocols.
+  - A setting with no counterpart on the Responses protocol is ignored and the developer is told.
+  - By default the library asks the provider not to keep the conversation; this is a preference, not a guarantee.
+- **Realized by:** UC-013; US-056, US-057, US-058, US-059, US-060, US-061
+- **Gap:** none.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+
 ## Cross-feature rules
 
 - A failure is reported on the call that hit it.
 - The library's own error carries the server's reason, including the server's reply text, and never a credential.
-- A failure while streaming and a malformed reply may surface as other kinds of error (accepted).
+- A failure while streaming and a malformed reply may surface as other kinds of error (accepted, chat completions only; on Responses a failure the server reports inside a stream is the library's error with the server's reason — FEAT-014).
 - Unreachable server or exceeded time limit: see the FEAT-002 gap.
-- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+- **Source:**
+  - `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - Amended streaming rule (Responses): `[confirmed: user]` interview "challenges — Responses delta" (2026-11-07), C3
 </auto-generated>
 <!-- product-spec:end -->

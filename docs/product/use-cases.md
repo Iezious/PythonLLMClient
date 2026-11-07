@@ -129,11 +129,11 @@
 - **Alternate flows:**
   - A1 The reply ends while reasoning: the block is closed.
   - A2 Reasoning resumes after answer text: a new block starts.
-  - A3 Streamed tool conversation: each round's reasoning is its own closed block; the returned answer has no reasoning; earlier reasoning is not sent back to the model. This holds for reasoning the server reports separately from the answer; reasoning the server writes directly into the answer text is returned and sent back as part of the answer (accepted).
+  - A3 Streamed tool conversation: each round's reasoning is its own closed block; the returned answer has no reasoning; on chat completions, earlier reasoning is not sent back to the model. On Responses, each round's reasoning is sent back to the server within the call (FEAT-014). This holds for reasoning the server reports separately from the answer; reasoning the server writes directly into the answer text is returned and sent back as part of the answer (accepted).
   - A4 A model that does not reason: no blocks appear.
   - A5 Not streaming: the answer only.
-  - A6 OpenAI: thinking on asks for the default reasoning effort; an explicit effort wins; the server's reasoning text is not shown.
-  - A7 Thinking off: llama-swap tells the server (unverified, gap); OpenAI should ask for the lowest effort (defect).
+  - A6 OpenAI: thinking on asks for the default reasoning effort; an explicit effort wins; the server's reasoning text is not shown. On Responses: OpenAI reasoning summary asked (UC-013 A3).
+  - A7 Thinking off: llama-swap tells the server (unverified, gap); OpenAI should ask for the lowest effort (defect). On Responses: thinking off asks for the lowest reasoning (UC-013 A4).
   - A8 Deprecated Ollama: the switch is ignored.
 - **Exception flows:**
   - E1 The stream fails during reasoning: the call fails; the block is left open (observed).
@@ -142,6 +142,7 @@
 - **Source:**
   - Main flow step 3 (returned text includes reasoning), A5, A7 and E2 (gaps): `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - A3 exception (server-inlined reasoning returned and re-sent): `[confirmed: user]` same interview section (not selected as a defect)
+  - A3 (Responses text), A6, A7 (Responses): `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
   - Evidence only (main flow 1–2, A1–A4, A6, A8, E1): behaviour per deep-docs notes I-05, I-16
 
 ### UC-007 — Let the model use the app's tools
@@ -282,5 +283,27 @@
   - A1, A2, A3 (scope), A4 ("None"), E1, E2, E3: `[confirmed: user]` interview "Wave 6 — FEAT-012 templates (batched, 2026-11-07)"
   - A3 detail (worked out only if its slot appears): behaviour per deep-docs notes I-12-I-33
   - Evidence only (main flow, A4 non-text values): behaviour per deep-docs notes I-12-I-33
+
+### UC-013 — Talk to a server through the chosen chat protocol
+- **Feature:** FEAT-014 · **Actors:** ACT-001, ACT-002
+- **Preconditions:** a registry entry for OpenAI or llama-swap.
+- **Main flow:**
+  1. The developer builds a client without naming a protocol; it speaks Responses.
+  2. The developer uses any chat operation (chat, generate, JSON-only, tool conversation; streamed or not).
+  3. The app gets the same kind of result as on chat completions.
+- **Alternate flows:**
+  - A1 The developer chooses chat completions (server without Responses).
+  - A2 Tool conversation with a reasoning model: each round's reasoning goes back to the server inside the call; the app gets the final answer.
+  - A3 Thinking on: reasoning is asked for (on OpenAI: its reasoning summary).
+  - A4 Thinking off: the lowest reasoning the model allows.
+  - A5 Embeddings and model listing: unaffected by the choice.
+- **Exception flows:**
+  - E0 Ollama with an explicitly requested protocol: refused at build time.
+  - E1 The server refuses a request: the library's error with the server's reason, never a credential.
+  - E2 The server reports a failure inside a stream: the library's error with the server's reason.
+  - E3 The server does not offer Responses: the call fails with the server's reason; the developer chooses chat completions.
+  - E4 A setting with no Responses counterpart: ignored, the developer is told.
+- **Postconditions:** the developer holds the same kind of result as on chat completions, or the library's error carrying the server's reason.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
 </auto-generated>
 <!-- product-spec:end -->

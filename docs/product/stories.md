@@ -299,11 +299,12 @@
 - **Acceptance criteria:**
   - **US-027.AC-1** — Given thinking on and a streamed tool conversation, when a round reasons, then the receiver gets that round's reasoning as its own closed block.
   - **US-027.AC-2** — Given thinking on and a streamed tool conversation, when the conversation ends, then the returned answer contains no reasoning the server reported separately from the answer.
-  - **US-027.AC-3** — Given a round whose reasoning the server reported separately from the answer, when the next round is sent, then the model does not receive that reasoning.
+  - **US-027.AC-3** — Given chat completions and a round whose reasoning the server reported separately from the answer, when the next round is sent, then the model does not receive that reasoning.
   - Exception (accepted): reasoning the server writes directly into the answer text is returned, and sent back, as part of the answer.
 - **Delivered:** legacy
 - **Source:**
   - AC-1, AC-2, AC-3 (separate reasoning): behaviour per deep-docs notes I-05
+  - AC-3 scoped to chat completions: `[confirmed: user]` interview "Delta — Responses protocol" (2026-11-07); Responses behaviour is US-058
   - Exception: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07) (not selected as a defect: server-inlined reasoning returned and re-sent)
 
 ### US-028 — No reasoning without streaming
@@ -642,5 +643,68 @@
 - **Source:**
   - Computed values in scope, AC-3 (errors pass through): `[confirmed: user]` interview "Wave 6 — FEAT-012 templates (batched, 2026-11-07)"
   - AC-1, AC-2: behaviour per deep-docs notes I-12-I-33
+
+### US-056 — Choose the protocol when building a client
+- **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (main 1, A1, E0)
+- **Status:** planned
+- **Story:** As an application developer, I want to choose the chat protocol when I build a client, so that it works with servers that do or do not offer Responses.
+- **Acceptance criteria:**
+  - **US-056.AC-1** — Given no protocol named, when the developer builds an OpenAI or llama-swap client, then it speaks Responses.
+  - **US-056.AC-2** — Given chat completions named, when the developer builds the client, then every chat operation uses chat completions.
+  - **US-056.AC-3** — Given any address, when the developer builds a client, then the protocol is the one chosen (or the default), never derived from the address.
+  - **US-056.AC-4** — Given a client, when the server refuses a request, then the library does not switch protocols on its own.
+  - **US-056.AC-5** — Given an Ollama backend and an explicitly requested protocol, when the developer builds the client, then building is refused and the error says the choice is not offered on Ollama.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+
+### US-057 — Every chat operation works the same on both protocols
+- **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (main 2–3, A5)
+- **Status:** planned
+- **Story:** As an application developer, I want every chat operation to give the same kind of result on either protocol, so that choosing a protocol changes nothing in my app.
+- **Acceptance criteria:**
+  - **US-057.AC-1** — Given each chat operation (chat, generate, JSON-only, tool conversation; streamed and not), when run on both protocols, then the app gets the same kind of result — checked by live tests on OpenAI and llama-swap.
+  - **US-057.AC-2** — Given either protocol, when the developer embeds text or lists models, then behaviour is unchanged.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+
+### US-058 — Tool conversation with a reasoning model
+- **Feature:** FEAT-014, FEAT-005, FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-013 (A2)
+- **Status:** planned
+- **Story:** As an application developer, I want a tool conversation with a reasoning model to complete, so that tools work with such models on Responses.
+- **Acceptance criteria:**
+  - **US-058.AC-1** — Given an OpenAI reasoning model and offered tools, when the developer runs a tool conversation on Responses, then it completes (live).
+  - **US-058.AC-2** — Given a two-round tool conversation, when run on OpenAI (reasoning model) and on llama-swap, then the final answer arrives (live).
+  - **US-058.AC-3** — Given a round that reasoned, when the next round is sent within the same call, then the server receives that round's reasoning where the protocol needs it.
+  - **US-058.AC-4** — Given a tool conversation, when it ends, then the app's conversation and finished history hold no reasoning (answers only).
+  - **US-058.AC-5** — Given a tool conversation, when it ends, then the returned answer has no reasoning.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+
+### US-059 — Reasoning on the Responses protocol
+- **Feature:** FEAT-014, FEAT-005 · **Actor:** ACT-001 · **Realizes:** UC-013 (A3, A4)
+- **Status:** planned
+- **Story:** As an application developer, I want reasoning asked for and shown on Responses as on chat completions, so that the thinking switch works the same.
+- **Acceptance criteria:**
+  - **US-059.AC-1** — Given thinking on and streaming, when the model reasons, then the receiver gets the reasoning as marked blocks, kept apart from the answer text.
+  - **US-059.AC-2** — Given an OpenAI client with thinking on, when the developer calls, then the library asks for the model's reasoning summary.
+  - **US-059.AC-3** — Given thinking off, when the developer calls on Responses, then the server is asked for the lowest reasoning the model allows.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+
+### US-060 — Failures on Responses carry the server's reason
+- **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (E1–E3)
+- **Status:** planned
+- **Story:** As an application developer, I want a failure on Responses reported with the server's reason, so that I can tell what went wrong.
+- **Acceptance criteria:**
+  - **US-060.AC-1** — Given the server refuses a request, when the developer calls, then the library's error carries the server's reason.
+  - **US-060.AC-2** — Given the server reports a failure inside a stream, when the developer streams, then the call ends with the library's error carrying the server's reason.
+  - **US-060.AC-3** — Given a server without Responses, when the developer calls on the default protocol, then the error carries the server's reason.
+  - **US-060.AC-4** — Given the server refuses a request, when the developer calls, then the library's error contains no credential.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+
+### US-061 — Settings without a Responses counterpart
+- **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (E4)
+- **Status:** planned
+- **Story:** As an application developer, I want a setting Responses cannot take ignored with notice, so that the call still works and I know what was dropped.
+- **Acceptance criteria:**
+  - **US-061.AC-1** — Given a setting with no counterpart on Responses, when the developer calls, then the call proceeds without it.
+  - **US-061.AC-2** — Given a setting with no counterpart on Responses, when the developer calls, then the developer is told it was ignored.
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
 </auto-generated>
 <!-- product-spec:end -->
