@@ -58,3 +58,18 @@ uv run pytest tests/integrations/  # Run integration tests (needs live servers)
 uv run ruff check llm/        # Lint
 uv run ruff format llm/       # Format
 ```
+
+<!-- legacy-docs-bootstrapper:start -->
+## Documentation layout
+
+This repository is a single service: the repository root is both the system doc root and the service doc root. One set of layers lives under `docs/`.
+
+- `docs/product/` — spec: vision, actors, features, use cases, stories, glossary
+- `docs/architecture/` — how the library is shaped: components, contracts, boundaries
+- `docs/decisions/` — technical decisions below architecture (`index.md` is the registry)
+- `docs/plans/` — created and owned by `/roadmap` / `/planner` on first use
+- `docs/.cache/` — orchestrator working artifacts (generated, gitignored)
+- `docs/.helpers/` — code_index data (generated; index files gitignored). This repo uses `code_index` (https://github.com/Iezious/code_index); run `code_index usage` for the manual.
+
+Layer rules: each layer folder's `CLAUDE.md`.
+<!-- legacy-docs-bootstrapper:end -->

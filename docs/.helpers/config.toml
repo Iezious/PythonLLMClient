@@ -1,0 +1,6 @@
+[code_index]
+version       = ">=0.3,<0.5"
+project       = "PythonLLMClient"
+roots         = ["."]
+embed_backend = "fastembed"
+embed_model   = "jinaai/jina-embeddings-v2-base-code"

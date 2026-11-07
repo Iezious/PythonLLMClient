@@ -30,3 +30,7 @@ htmlcov/
 # Distribution
 *.whl
 *.tar.gz
+
+# Legacy-docs pipeline
+docs/.cache/
+docs/.helpers/index.sqlite*
