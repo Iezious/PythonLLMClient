@@ -17,11 +17,11 @@ A decision record **never introduces** a new contract, service, DTO or call stru
 | Who needs to know | Record |
 |---|---|
 | Only a reader of this block or file | a comment in the code — the `why`, citing the step/DoD, `DEC` or architecture § it serves |
-| Anyone working in this folder | that folder's `CLAUDE.md`, `## Conventions` section (outside the `agent-ready` markers) |
+| Anyone working in this folder | that folder's `AGENTS.md`, `## Conventions` section (outside the `agent-ready` markers) |
 | Anyone working on the feature, or a reader of the architecture asking "why this default / this mechanism" | `DEC` entry here |
 
 - A block- or file-scoped choice lives **only** in the comment.
-- A folder-scoped convention lives **only** in that folder's `CLAUDE.md`.
+- A folder-scoped convention lives **only** in that folder's `AGENTS.md`.
 - A `DEC` entry is for anything whose reader is outside the folder. When in doubt between folder and `DEC`, ask whether a second folder would have to agree with it — yes → `DEC`.
 - Nothing is recorded twice. A comment cites the `DEC` id; it does not restate the decision.
 
@@ -29,7 +29,7 @@ A decision record **never introduces** a new contract, service, DTO or call stru
 
 ```
 docs/decisions/
-  CLAUDE.md                 # this contract
+  AGENTS.md                 # this contract
   index.md                  # registry: one line per DEC id → title · status · feature · stage (regenerated at every write)
   <NNN>.<feature>.md        # multi-step feature's decisions
   fast-<NNN>.<name>.md      # fast feature's decisions
