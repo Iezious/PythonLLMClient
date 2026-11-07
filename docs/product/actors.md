@@ -5,8 +5,10 @@
 ### ACT-001 — Application developer
 - **One-line:** Writes the in-house Python app that calls the library.
 - **Goal:** Pick backend and model, send conversations and prompts, supply tools, consume streamed output, embeddings and model lists.
-- **Context:** Also turns on interaction tracing and supplies the OpenAI credential through the environment; no separate operator role.
-- **Source:** `[confirmed: user]` interview 2026-11-07 (Phase 2 spec-seed round)
+- **Context:** Also turns on interaction tracing and provides credentials to the library when building clients (may read them from wherever they like); no separate operator role.
+- **Source:**
+  - `[confirmed: user]` interview 2026-11-07 (Phase 2 spec-seed round)
+  - Credentials provided by the app: `[confirmed: user]` interview "I-01 — wave-1 checkpoint (CORRECTION)" (2026-11-07)
 
 ### ACT-002 — LLM backend server
 - **One-line:** External system the library talks to: llama-swap (primary), OpenAI or OpenAI-compatible service, Ollama (deprecated).

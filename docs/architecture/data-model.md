@@ -30,7 +30,12 @@ All backends take the OpenAI function-tool shape:
 
 Settings are passed as `options` (per call) or `default_options` (per client). Defaults are not documented here.
 
-**Merge precedence**, lowest to highest: backend built-in values, client `default_options`, call `options`. Aliases are resolved first, unsupported keys are dropped, empty values are removed last. Built-in values are always sent.
+**Merge precedence**, lowest to highest: backend built-in values, client `default_options`, call `options`. Aliases are resolved first, unsupported keys are dropped, empty values are removed last. An explicit "nothing" (`None`) clears a value at every layer.
+
+- The typed settings shapes are hints. The per-backend supported tables are authoritative; plain dictionaries are accepted.
+- The shapes are public; top-level export is pending. There is no llama-swap shape yet (it uses the OpenAI keys).
+- Known defects (see `quick-reference.md`, Open): built-in values are always sent, not only the settings the application set; some settings declared in the typed shapes are dropped by the merge.
+- The end-user identifier is sent with embedding requests; the call's value wins and a call cannot clear it (accepted). Other settings are not sent with embeddings on OpenAI and llama-swap.
 
 **OpenAI and llama-swap keys:** `temperature`, `top_p`, `max_tokens`, `presence_penalty`, `frequency_penalty`, `seed`, `enable_thinking`, `reasoning_effort`. Alias: `context_length` -> `max_tokens`.
 
@@ -60,9 +65,10 @@ Written only when tracing is enabled.
   2. `SYSTEM PROMPT` (when a system instruction is present).
   3. `MESSAGE HISTORY` (`[role] content`, tool calls shown as `-> tool_call: name(args)`).
   4. `REQUEST` (method and path, then the payload as indented JSON; in tool loops tagged with the loop number).
-  5. `CHUNK`, one per streamed piece (streaming chat only, not streaming tool chat).
+  5. `CHUNK`, one per streamed piece (plain streaming chat only, not tool-path streams).
   6. `TOOL CALL: <name>` and `TOOL RESULT: <name>`.
   7. `RESPONSE` (final text, or the count of embeddings returned).
   8. `ERROR` (`<ExceptionType>: <message>`), followed by the exception being re-raised.
   9. Footer `END TRACE`.
-- Request headers are not recorded.
+- Request headers are not recorded; the credential header is never written.
+- Recording scope and the tracing rules are in `subsystems.md`, Tracer.

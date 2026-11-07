@@ -5,112 +5,250 @@
 Default source for features without their own `Source:` detail: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round" (plan confirmed), behaviour per product scout.
 
 ### FEAT-001 — Connect to a chosen backend
-- **Purpose:** Build a client for one registry entry (backend kind, address, credential, model); apps keep their own registry and pick one per conversation. · **Actors:** ACT-001, ACT-002 · **Priority:** must
+- **Purpose:** Build a client for one registry entry (backend kind, address, credential, model); the app provides the credential; apps keep their own registry and pick one per conversation. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
-- **Rule:** The OpenAI backend cannot be used without a credential. Ollama as a backend choice is deprecated.
+- **Rule:**
+  - One client serves exactly one backend, address and model; to use another model or server the app builds another client.
+  - The OpenAI backend cannot be used without a credential. The app provides the credential when building the client; the library never takes a credential from the environment on its own (the app may read it from wherever it likes).
+  - Only the supported backend kinds are accepted, by their exact names.
+  - Ollama as a backend choice is deprecated.
+  - One client may serve several calls at the same time.
+  - The time limit set when building the client applies to each request to the server, including a whole streamed reply; there is no per-call limit.
+  - A client built directly without an address uses the backend's usual address; the library's single entry point always requires an address.
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
+- **Realized by:** UC-001; US-001, US-002, US-003, US-004, US-005, US-029, US-047
+- **Gap:**
+  - _TBD: defect — the library must load after a normal install, without development extras_
+  - _TBD: defect — today a credential the app provides for OpenAI through the library's single entry point is not used, and the library reads a credential from its own environment instead (which it would also send to any other address the client points at) — must be fixed_
+  - _TBD: choosing the deprecated Ollama backend should tell the developer it is deprecated — not yet supported_
+  - _TBD: a client used without a usage scope should also release its connection to the server — not yet supported (today only closing the usage scope releases it)_
 - **Source:**
+  - Rules (one model per client, exact names) and gaps (Ollama warning, usage-scope release): `[confirmed: user]` interview "I-01 — FEAT-001 Connect to a chosen backend" (2026-11-07)
+  - Credential rule and defect gap: `[confirmed: user]` interview "I-01 — wave-1 checkpoint (CORRECTION)" (2026-11-07); supersedes the earlier environment-credential answer
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+  - Rules (parallel calls, time limit, default address): `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
+  - Load-after-install defect gap: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - Ollama deprecated: `[confirmed: user]` interview "2026-11-07 — Vision discussion"
   - Registry framing (apps keep their own registry, pick one per conversation): `[example evidence]` interview "2026-11-07 — Consumer-example round"
-  - OpenAI credential rule: `[confirmed: scout F1]` product scout finding F1
+  - base requirement: product scout finding F1
 
 ### FEAT-002 — Chat with a model
 - **Purpose:** Send a conversation, optionally preceded by a system instruction, and get the reply text. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - The app's conversation is never changed by a call.
+  - An empty system instruction counts as none.
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+- **Realized by:** UC-002; US-006, US-007, US-008, US-009, US-010, US-011
+- **Gap:**
+  - _TBD: defect — a reply with no content must reach the app as empty text, streamed or not; today a non-streamed one comes back as nothing, and with tracing on the call fails_
+  - _TBD: an empty conversation should be refused before the server is contacted — not yet supported_
+  - _TBD: defect — an unreachable server or an exceeded time limit should be reported as the library's own error; today it surfaces as a transport error_
+- **Source:**
+  - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+  - Rules and gaps: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
 
 ### FEAT-003 — Generate from a single prompt
 - **Purpose:** Send one prompt (optional system instruction) and get the reply text. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
+- **Rule:** An empty system instruction counts as none.
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+- **Realized by:** UC-003; US-007, US-010, US-012, US-013
+- **Gap:** _TBD: an empty prompt should be refused before the server is contacted — not yet supported_
+- **Source:**
+  - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+  - Rule and gap: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
 
 ### FEAT-004 — Stream replies as they are produced
 - **Purpose:** Receive the reply piece by piece as it is generated, and the full text at the end. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
-- **Rule:** Not available on the deprecated Ollama backend.
+- **Rule:**
+  - Not available on the deprecated Ollama backend.
+  - Pieces reach the receiver in the order produced, one at a time.
+  - The receiver may be a plain or an awaitable function.
+  - If the receiver fails, the stream stops and the call ends with that failure.
+  - A streamed tool conversation gives the receiver every round's text and reasoning; the call returns only the final answer.
+  - JSON-only answers are not streamed (out of scope).
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Gap:** _TBD: apps need a stream they can consume incrementally and stop early, with answer text, reasoning and tool-call fragments as separate parts — not yet supported_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
+- **Realized by:** UC-005; US-008, US-013, US-021, US-022, US-023, US-024, US-036
+- **Gap:**
+  - _TBD: apps need a stream they can consume incrementally and stop early, with answer text, reasoning and tool-call fragments as separate parts — not yet supported_
+  - _TBD: defect — an error the server sends inside a stream, or a stream that ends early, must be reported as an error; today the app gets partial or empty text silently_
+  - _TBD: defect — streamed text must arrive complete: non-English characters and replies from servers that end lines differently or split one piece over several lines currently lose text_
+- **Source:**
+  - `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
+  - Defect gap: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - Receiver rules, tool-conversation streaming, JSON out of scope: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
+  - Complete-text defect gap: `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
 
 ### FEAT-005 — See the model's reasoning
 - **Purpose:** Ask for model reasoning in one backend-neutral way and receive it when streaming. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - One backend-neutral thinking switch.
+  - Reasoning is shown only while streaming, marked off as reasoning.
+  - A streamed plain chat returns the reasoning together with the answer, exactly as streamed.
+  - A tool conversation returns its answer without reasoning and does not send earlier reasoning back to the model; this holds for reasoning the server reports separately from the answer. Reasoning the server writes directly into the answer text is returned and sent back as part of the answer (accepted).
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Gap:** _TBD: reasoning delivered separately from the answer text while streaming (today both arrive mixed in one stream of text) — not yet supported_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Vision discussion" (signal 4); "2026-11-07 — Consumer-example round"
+- **Realized by:** UC-006; US-025, US-026, US-027, US-028
+- **Gap:**
+  - _TBD: reasoning delivered separately from the answer text while streaming (today both arrive mixed in one stream of text) — not yet supported_
+  - _TBD: defect — turning thinking off on OpenAI must ask for the lowest reasoning effort; today it sends nothing and a reasoning model still reasons_
+  - _TBD: llama-swap should pass an explicit reasoning effort to the server — not yet supported_
+  - _TBD: verify that turning thinking off on llama-swap actually stops reasoning — unverified_
+  - _TBD: defect — in a streamed plain chat, a piece that carries both reasoning and answer text loses the answer text_
+- **Source:**
+  - `[confirmed: user]` interview "2026-11-07 — Vision discussion" (signal 4); "2026-11-07 — Consumer-example round"
+  - Rules (marked off, streamed chat returns reasoning) and gaps: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
+  - Tool-conversation rule (separate reasoning): behaviour per deep-docs notes I-05
+  - Tool-conversation exception (server-inlined reasoning returned and re-sent): `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07) (not selected as a defect)
 
 ### FEAT-006 — Get JSON-only answers
-- **Purpose:** Ask for an answer that is JSON only; invalid JSON is reported as an error. · **Actors:** ACT-001, ACT-002 · **Priority:** must
+- **Purpose:** Ask for an answer that is JSON only; invalid JSON is reported as an error when the reply is checked. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - The JSON-only answer is returned as the text received.
+  - On llama-swap and OpenAI the reply is checked to be JSON only when the developer gives an expected shape; the deprecated Ollama always checks.
+  - JSON-only answers are not streamed.
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+- **Realized by:** UC-008; US-038, US-039, US-040
+- **Gap:**
+  - _TBD: gap — an expected shape should be sent to the server so the model is held to it, where the backend supports it_
+  - _TBD: defect — a valid JSON reply that is a single value is wrongly reported as not JSON when an expected shape with fields is given (OpenAI)_
+- **Source:**
+  - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+  - Check only with a shape (keep), expected-shape gap: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
+  - Single-value defect: `[confirmed: user]` Wave 5 — "drop the dead loop" (removes the single-value misreport)
+  - Not streamed: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
+  - Text returned as received: behaviour per deep-docs notes I-06-I-28
 
 ### FEAT-007 — Let the model use the app's tools
 - **Purpose:** Offer the model a set of app functions; the library runs the ones the model asks for, returns their results, and repeats until the model answers or a round limit is reached. Includes describing a tool from a typed data model. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - Every offered tool must have a function; this is checked before the server is contacted.
+  - Requested tools run one after another, in the order asked.
+  - A failing tool, or an argument the tool does not have, ends the whole call; the model is not told.
+  - A tool conversation has a per-call round limit as a safety guard.
+  - A requested answer format applies to every round of the conversation.
+  - The final answer is not checked against the requested format (accepted).
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Gap:** _TBD: the app can observe each tool call and its result as it happens — not yet supported_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Vision discussion" (signal 3); "2026-11-07 — Consumer-example round"
+- **Realized by:** UC-007; US-023, US-027, US-030, US-031, US-032, US-033, US-034, US-035, US-037
+- **Gap:**
+  - _TBD: the app can observe each tool call and its result as it happens — not yet supported_
+  - _TBD: defect — when the round limit is reached, the error must say the round limit was the reason_
+  - _TBD: defect — a request for a tool that was not offered, argument text that cannot be read, or a tool result that cannot be turned into text must end with the library's error_
+  - _TBD: defect — tool requests streamed without position numbers or with a repeated name must still run as separate, correct calls_
+- **Source:**
+  - `[confirmed: user]` interview "2026-11-07 — Vision discussion" (signal 3); "2026-11-07 — Consumer-example round"
+  - Rules (failing tool ends the call, round limit as safety guard, format on every round, final answer not validated) and defect gaps: `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
+  - Rules (function checked up front, tools run in order): behaviour per deep-docs notes I-07
 
 ### FEAT-008 — Embed text
 - **Purpose:** Turn one text or a batch of texts into vectors. · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - Only vectors are returned.
+  - Generation settings are not sent with embedding requests.
+  - An end-user identifier set on the client or the call reaches the server, the call's value winning; a call cannot clear the client's identifier (accepted).
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+- **Realized by:** UC-009; US-041, US-042, US-043
+- **Gap:**
+  - _TBD: defect — a batch must give exactly one vector per text, in the texts' order, or end with the library's error_
+  - _TBD: gap — an empty batch should return an empty result without contacting the server_
+  - _TBD: defect — a malformed embedding reply must end with the library's error_
+- **Source:**
+  - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
+  - Only vectors: `[confirmed: user]` interview "2026-11-07 — Vision discussion" (non-goal 2)
+  - Identifier not clearable per call (accepted), gaps: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
+  - Settings not sent, identifier reaches the server: behaviour per deep-docs notes I-08-I-31
 
 ### FEAT-009 — Discover available models
 - **Purpose:** List the models a backend offers (and, where supported, their full descriptions). · **Actors:** ACT-001, ACT-002 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - Model names are available on every backend; full descriptions on llama-swap and OpenAI only.
+  - Listing does not depend on the client's model.
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Gap:** _TBD: a reachability / credential check that reports its outcome (reachable, unreachable, credential refused, no models) instead of failing — not yet supported_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
+- **Realized by:** UC-010; US-044, US-045, US-046
+- **Gap:**
+  - _TBD: a reachability / credential check that reports its outcome (reachable, unreachable, credential refused, no models) instead of failing — not yet supported_
+  - _TBD: defect — a model list entry without a name, or an unreadable reply, must end with the library's error_
+- **Source:**
+  - `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
+  - Defect gap: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
+  - Rules: behaviour per deep-docs notes I-09
 
 ### FEAT-010 — Tune generation with layered settings
 - **Purpose:** Set generation settings once per client and override them per call; each backend exposes its own settings, with common alternative names accepted. · **Actors:** ACT-001 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - Per setting, the call-time value wins over the client default, which wins over the library's value.
+  - A setting given as "nothing" is not sent, so the server's own default applies.
+  - Unknown or unsupported settings are ignored without error, so the same settings work on every backend.
+  - Each backend accepts its own alternative names for some settings.
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Gap:** _TBD: llama-swap should also accept top-k, min-p and repeat-penalty sampling controls; today they are silently ignored_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (llama-swap bullet); "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
+- **Realized by:** UC-004; US-014, US-015, US-016, US-017, US-018, US-019, US-020
+- **Gap:**
+  - _TBD: llama-swap should also accept top-k, min-p and repeat-penalty controls, sent only when the app sets them; today they are silently ignored_
+  - _TBD: defect — only settings the app set should be sent; today the library sends its own values for several settings, overriding the server's or model's presets_
+  - _TBD: defect — stop sequences, token bias, end-user identifier and response format, which the library offers as settings, must reach the server; today they are silently ignored_
+- **Source:**
+  - Base feature, llama-swap controls gap: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (llama-swap bullet); "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"; "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (send only what is set)
+  - Rules ("nothing", unknown ignored, alternative names) and defect gaps: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - Precedence (call > client default > library value): behaviour per deep-docs notes I-10
 
 ### FEAT-011 — Trace every LLM interaction
-- **Purpose:** Turn on, through the environment, a readable per-call record of prompts, requests, streamed pieces, tool calls and results, answers and errors. · **Actors:** ACT-001 · **Priority:** must
+- **Purpose:** Turn on, through the environment, a readable per-call record of prompts, requests, streamed pieces, tool calls and results, answers and errors, as a debugging aid. · **Actors:** ACT-001 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - Tracing is a debugging aid for the developer, not an audit record; records are plain readable text, not redacted, and best-effort.
+  - Tracing is off unless the developer turns it on and names a folder.
+  - The access credential is never written to a record; a credential embedded in the server address or echoed in a server reply is not covered (accepted).
+  - Tracing must never change a call's outcome.
+  - A call with an empty system instruction still gets a system section in its record (accepted).
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (operator = developer); "2026-11-07 — Vision discussion" (signal 5)
+- **Realized by:** UC-011; US-048, US-049, US-050, US-051, US-052
+- **Gap:**
+  - _TBD: defect — a call must go ahead untraced when its record cannot be written_
+  - _TBD: defect — calls running at the same time must each get their own record_
+  - _TBD: defect — a failure to write the record must not hide the call's own error_
+  - _TBD: defect — the system instruction appears once in a record_
+- **Source:**
+  - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (operator = developer); "2026-11-07 — Vision discussion" (signal 5)
+  - Debugging-aid role, never changes a call's outcome, defect gaps, accepted empty-instruction section, accepted credential scope, supported trace facility: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
+  - Off unless turned on with a folder, credential never written: behaviour per deep-docs notes I-11-I-32
 
 ### FEAT-012 — Fill prompt templates
 - **Purpose:** Replace named placeholders in a prompt template with values. · **Actors:** ACT-001 · **Priority:** must
 - **Status:** delivered
+- **Rule:**
+  - Slots are names in double braces.
+  - Known slots are filled at every place they occur.
+  - Unknown slots and slots written with spaces stay as written, silently.
+  - A value that is not text appears in its text form; an empty value appears as the word "None".
+  - Repeated filling (a slot inside a value is filled in turn) and computed values are part of the feature.
 - **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Source:** `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round"
+- **Realized by:** UC-012; US-053, US-054, US-055
+- **Gap:**
+  - _TBD: gap — repeated filling is not offered from the library's top level_
+  - _TBD: defect — repeated filling keeps working after nothing more can be filled_
+- **Source:**
+  - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round"
+  - Repeated filling and computed values in scope, top-level gap, unknown/spaced slots stay, "None" for empty (keep), defect gap: `[confirmed: user]` interview "Wave 6 — FEAT-012 templates (batched, 2026-11-07)"
+  - Slots are names in double braces, known slots filled everywhere, non-text values in text form: behaviour per deep-docs notes I-12-I-33
 
 ### FEAT-013 — Smoke-test a backend from the command line
 - **Purpose:** Send one prompt to a local backend from the command line to check it works. · **Actors:** ACT-001 · **Priority:** must
-- **Status:** delivered
-- **Delivered:** legacy
-- **Realized by:** _TBD: stories — run /deep-docs or /product-spec_
-- **Gap:** Today it targets only the deprecated Ollama backend and is not functional. _TBD: retarget to llama-swap or retire_
-- **Source:**
-  - Kept in scope: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round"
-  - Retarget-or-retire TBD: orchestrator default; user may override
+- **Status:** withdrawn — retired by the user; the command-line smoke test is no longer part of the product
+- **Source:** `[confirmed: user]` interview "deep-docs scope round" (2026-11-07), Retire
 
-## Open requirement question
+## Cross-feature rules
 
-_TBD: failures should reach the app as one kind of error carrying a reason, never exposing the credential or the server's response body — today several kinds of failure surface differently_
+- A failure is reported on the call that hit it.
+- The library's own error carries the server's reason, including the server's reply text, and never a credential.
+- A failure while streaming and a malformed reply may surface as other kinds of error (accepted).
+- Unreachable server or exceeded time limit: see the FEAT-002 gap.
+- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
 </auto-generated>
 <!-- product-spec:end -->

@@ -6,17 +6,39 @@
 - **llama-swap** — local orchestrator serving llama.cpp models; the primary backend.
 - **OpenAI-compatible server** — any server speaking the OpenAI API, including OpenAI itself.
 - **model** — a named LLM a backend serves.
-- **conversation / message / role** — ordered messages, each with a role (e.g. user, assistant).
-- **system instruction** — optional leading instruction placed before the conversation.
+- **conversation / message / role** — the ordered list of messages, each a role (e.g. user, assistant) and text, that an app sends in a chat.
+- **system instruction** — optional text that steers the model, sent ahead of the conversation or prompt.
 - **reply streaming / streamed piece** — receiving the reply in fragments as it is generated.
 - **reasoning (thinking)** — the model's intermediate thought text, distinct from its answer.
 - **JSON-only answer** — reply constrained to be valid JSON.
 - **tool / tool definition** — app function offered to the model, and its description.
 - **tool call / tool result** — the model's request to run a tool, and the output returned to it.
-- **tool round / round limit** — one model-then-tools cycle, and the cap on cycles.
+- **tool round / round limit** — one model-then-tools cycle, and the per-call safety cap on cycles; reaching it ends the call with an error.
 - **embedding** — vector representing a text.
-- **generation settings / setting alias** — per-client and per-call tuning values, and alternative names accepted for them.
-- **trace / trace record** — readable per-call log of an LLM interaction.
-- **prompt template / placeholder** — prompt text with named slots, and a slot to be replaced by a value.
+- **generation settings / setting alias** — per-client and per-call values that steer how the model writes a reply (randomness, length cap, penalties, thinking), and another name a backend accepts for a setting.
+- **trace / trace record** — readable per-call log of an LLM interaction; a debugging aid in plain, unredacted text, best-effort.
+- **prompt template / placeholder** — prompt text with named slots written in double braces, and a slot to be replaced by a value.
+- **client** — what an app builds for one backend, address and model; all calls go through it.
+- **backend kind** — the name an app uses to pick a backend when building a client.
+- **usage scope** — the span between opening and closing a client; closing it releases the connection to the server.
+- **credential** — the secret a backend may require to accept requests; required for OpenAI, optional for llama-swap; always provided by the app.
+- **registry entry** — an app-side record of one server (backend kind, address, credential, model) from which a client is built.
+- **prompt** — a single piece of text sent to get a reply, with no conversation history.
+- **client defaults** — generation settings given once when building a client, used by every call unless replaced.
+- **piece receiver** — an optional app function the library calls with each streamed piece of a reply.
+- **reasoning block** — one continuous stretch of the model's reasoning as the app receives it, marked at its start and end.
+- **thinking switch** — the single setting by which an app asks a model to reason or not, whatever the backend.
+- **reasoning effort** — how much a reasoning model should think, where the backend supports it.
+- **streamed tool conversation** — a tool conversation whose rounds are streamed to the piece receiver; only the final answer is returned.
+- **offered tool** — a tool the app describes to the model for this conversation; every offered tool needs a function.
+- **structured final answer** — the model's last reply in a tool conversation, limited to JSON or a given shape.
+- **expected shape** — an optional description of the JSON structure the developer wants back from a JSON-only answer.
+- **batch embedding** — turning several texts into vectors in one request, one vector per text.
+- **end-user identifier** — an optional label for the app's own end user, passed to the server for attribution.
+- **model name** — the name a server uses for one of its models; what listing returns and what a client is built for.
+- **model description** — the full record a server keeps for a model.
+- **trace folder** — the folder the developer names for trace records, grouped by day.
+- **repeated filling** — filling slots that appear inside inserted values, in turn.
+- **computed value** — a template value worked out only when its slot is filled.
 </auto-generated>
 <!-- product-spec:end -->
