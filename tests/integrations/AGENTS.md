@@ -2,13 +2,14 @@
 
 <!-- agent-ready:start -->
 
-Live tests against real llama-swap and OpenAI servers; they are part of the default `uv run pytest` run.
+Live tests against real llama-swap and OpenAI servers; they are part of the default `uv run pytest` run. OpenAI tests take the key from the test environment, pass it as `bearer_token`, and skip without it.
 
 ## Contents
 
 **Files:**
 - `__init__.py` — package marker.
 - `test_llm_integrations.py` — basic live calls (generate, chat, embed, embed_batch, get_models) against llama-swap and OpenAI.
+- `test_llm_stream_robustness.py` — live streamed chat in non-English scripts, checking multi-byte text arrives complete on llama-swap and OpenAI.
 - `test_llm_streaming.py` — live streaming chat with a delta callback.
 - `test_llm_thinking.py` — live reasoning output and think-tag well-formedness.
 - `test_llm_tools.py` — live tool-calling chat.

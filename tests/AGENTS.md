@@ -2,7 +2,7 @@
 
 <!-- agent-ready:start -->
 
-Unit tests that fake the server by monkeypatching client seams.
+Unit tests that fake the server by monkeypatching client seams or a fake HTTP session, so client behaviour is checked without a live backend.
 
 ## Contents
 
@@ -11,12 +11,17 @@ Unit tests that fake the server by monkeypatching client seams.
 
 **Files:**
 - `__init__.py` — package marker.
-- `test_get_models.py` — `get_models` on OpenAI and llama-swap with `_request` stubbed: full model records returned; an invalid response raises `LLMError`.
+- `test_get_models.py` — `get_models` on OpenAI and llama-swap with `_request` stubbed: model records and invalid-response handling.
+- `test_llamaswap_client_fixes.py` — `LlamaSwapAPIClient` request behaviour: streamed requests through the base helper (credential header, failures as `LLMError`), null reply content, and which generation settings are sent.
 - `test_llm_embeddings.py` — `embed` / `embed_batch` request and response parsing.
-- `test_llm_factory.py` — `get_llm_client` returns the right client per kind (older script style).
+- `test_llm_factory.py` — `get_llm_client`: per-kind client construction, credential forwarding, refusal of unknown kinds; builds clients with explicit arguments only.
 - `test_llm_options.py` — option precedence across defaults, constructor and call (older script style).
+- `test_llm_request_errors.py` — base-client request errors: transport failures and non-2xx replies of `LLMClient._request` and `_stream_post` mapped to `LLMError`, and the effect on the Ollama embed fallback.
+- `test_llm_sse_stream.py` — the shared chat-completions SSE reader and the plain / tool stream parsers: line framing, multi-byte text, error and malformed frames, early stream end, reasoning blocks.
 - `test_llm_tools_reasoning_stream.py` — tool-stream parser reasoning handling, driven through a stubbed `_iter_sse_data`.
 - `test_llm_tools_streaming.py` — streaming `chat_with_tools` on OpenAI and llama-swap with `_tools_stream_request` stubbed.
+- `test_openai_client_fixes.py` — `OpenAIAPIClient` request behaviour: app-provided credential and its refusal, streamed requests through the base helper, null reply content, which settings are sent, response-format precedence.
+- `test_package_surface.py` — packaging contract: declared runtime dependencies and the version agreeing between `pyproject.toml` and `llm.__version__`.
 
 See also: `docs/architecture/subsystems.md#base-client-llmclient`
 

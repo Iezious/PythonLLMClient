@@ -1,24 +1,37 @@
+"""llama-swap Chat Completions client: optional credential, the shared request/stream helpers, typed settings.
+
+Fixes from feature 001: streamed requests via ``_stream_post``, null reply content as empty text,
+and only app-set settings sent (including stop sequences, token bias, end-user id, response format).
+"""
+
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 import json
 import inspect
-import aiohttp
 
 from llm.llm_client import LLMClient
 from llm.exceptions import LLMError
 from llm.message import LLMMessage
 from llm.options import OpenAIOptions
 
+# Settings the llama-swap client accepts. Every value is None: the table contributes no
+# built-in value, so only keys the app set reach the server (DEC-001-13). `stop`,
+# `logit_bias`, `user` and `response_format` are offered settings (DEC-001-14).
 _LLAMA_SWAP_SUPPORTED_PARAMS: Dict[str, Any] = {
-    "temperature": 1.0,
-    "top_p": 1.0,
+    "temperature": None,
+    "top_p": None,
     "max_tokens": None,
-    "presence_penalty": 0.0,
-    "frequency_penalty": 0.0,
+    "presence_penalty": None,
+    "frequency_penalty": None,
     "seed": None,
     "enable_thinking": None,
     "reasoning_effort": None,
+    "stop": None,
+    "logit_bias": None,
+    "user": None,
+    "response_format": None,
 }
 
+# Setting aliases (unchanged): `context_length` acts as `max_tokens`.
 _LLAMA_SWAP_ALIAS_MAP = {
     "context_length": "max_tokens",
 }
@@ -49,6 +62,19 @@ class LlamaSwapAPIClient(LLMClient):
         *,
         options: Optional[OpenAIOptions],
     ) -> Dict[str, Any]:
+        """Merge table, client-default and per-call settings into the request settings.
+
+        Uses the base three-layer merge (DEC-000-5) with the llama-swap tables: aliases applied,
+        unknown keys dropped, a per-call value wins over a client default, and a higher-layer
+        ``None`` removes the key. ``reasoning_effort`` is always dropped; ``enable_thinking`` is
+        sent as-is, and only when set (DEC-000-19).
+
+        Args:
+            options: Per-call settings, or ``None``.
+
+        Returns:
+            Only the settings the app set, keyed by their server names.
+        """
         opts = self._merge_options_base(
             options=options,
             supported_params=_LLAMA_SWAP_SUPPORTED_PARAMS,
@@ -80,6 +106,29 @@ class LlamaSwapAPIClient(LLMClient):
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
+        """Send one chat-completions request and return the reply text.
+
+        The merged settings are spread top-level into the request body. Non-streamed: returns
+        the reply's content, with a null content returned (and traced) as ``""`` (DEC-001-12).
+        Streamed: opens the request through the base ``_stream_post("/chat/completions", payload)``
+        helper (DEC-001-8), passes each text piece to ``on_delta`` in order, and returns their
+        concatenation; when tracing is enabled the receiver is wrapped so every piece is traced
+        first (DEC-000-48).
+
+        Args:
+            messages: Conversation turns.
+            system: Optional system prompt, inserted as the first turn.
+            options: Per-call settings.
+            stream: Stream the reply.
+            on_delta: Receiver of streamed text pieces; its failure propagates unchanged.
+
+        Returns:
+            The reply text (never ``None``).
+
+        Raises:
+            LLMError: Non-2xx reply (address, status, server reply; never the credential) or an
+                unreachable server, on either branch.
+        """
         opt = self._merge_options(options=options)
 
         msgs = list(messages)
@@ -99,16 +148,11 @@ class LlamaSwapAPIClient(LLMClient):
             t.log_request("POST", "/chat/completions", payload)
 
             if not stream:
-                result = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
+                content = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
+                # DEC-001-12: coerce null before tracing and returning, so neither sees None.
+                result = content if content is not None else ""
                 t.log_response(result)
                 return result
-
-            session = await self._ensure_session()
-            url = f"{self.base_url}/chat/completions"
-            headers = {}
-            if self.bearer_token:
-                headers["Authorization"] = f"Bearer {self.bearer_token}"
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
 
             _orig_delta = on_delta
 
@@ -119,9 +163,12 @@ class LlamaSwapAPIClient(LLMClient):
                     if inspect.isawaitable(result):
                         await result
 
-            async with session.post(url, headers=headers, timeout=timeout, json=payload) as response:
-                response.raise_for_status()
-                result = await self._stream_openai_chat_response(response, _tracing_delta if self._tracer.enabled else on_delta)
+            # DEC-001-8: the helper maps non-2xx and transport failures to LLMError. The trace wrapper
+            # is installed only when tracing is enabled (DEC-000-48).
+            async with self._stream_post("/chat/completions", payload) as response:
+                result = await self._stream_openai_chat_response(
+                    response, _tracing_delta if self._tracer.enabled else on_delta
+                )
                 t.log_response(result)
                 return result
 
@@ -151,12 +198,33 @@ class LlamaSwapAPIClient(LLMClient):
         system: Optional[str] = None,
         options: Optional[OpenAIOptions] = None,
     ) -> str:
+        """Request a JSON answer and return its text.
+
+        Sends the merged ``response_format`` setting when the app set one, otherwise
+        ``{"type": "json_object"}`` (DEC-001-2). A null reply content is returned as ``""``
+        (DEC-001-12). When ``response_schema`` is given the text must parse as JSON.
+
+        Args:
+            messages: Conversation turns.
+            response_schema: When truthy, enables the JSON parse check.
+            system: Optional system prompt, inserted as the first turn.
+            options: Per-call settings.
+
+        Returns:
+            The reply text (never ``None``).
+
+        Raises:
+            LLMError: Request failure, or the reply is not valid JSON while ``response_schema``
+                is given.
+        """
         opt = self._merge_options(options=options)
 
         msgs = list(messages)
         if system:
             msgs.insert(0, {"role": "system", "content": system})
 
+        # DEC-001-2: the JSON-object format is the fallback only; ``opt`` is spread after it, so an
+        # app-set ``response_format`` setting replaces it. Keep this order.
         payload = {
             "model": self.model,
             "messages": msgs,
@@ -169,7 +237,9 @@ class LlamaSwapAPIClient(LLMClient):
             t.log_system(system)
             t.log_messages(msgs)
             t.log_request("POST", "/chat/completions", payload)
-            response_content = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
+            content = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
+            # DEC-001-12: null content becomes empty text before tracing and the parse check.
+            response_content = content if content is not None else ""
             t.log_response(response_content)
 
         if response_schema:
@@ -188,14 +258,23 @@ class LlamaSwapAPIClient(LLMClient):
         payload: Dict[str, Any],
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> tuple[str, list[dict]]:
-        session = await self._ensure_session()
-        url = f"{self.base_url}/chat/completions"
-        headers: Dict[str, str] = {}
-        if self.bearer_token:
-            headers["Authorization"] = f"Bearer {self.bearer_token}"
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with session.post(url, headers=headers, timeout=timeout, json=payload) as response:
-            response.raise_for_status()
+        """Run one streamed tool round (test seam; inputs and outputs unchanged).
+
+        Opens the request through the base ``_stream_post("/chat/completions", payload)`` helper
+        (DEC-001-8) and parses the stream with the tools parser.
+
+        Args:
+            payload: The full request body of this round.
+            on_delta: Receiver of streamed text pieces; its failure propagates unchanged.
+
+        Returns:
+            ``(content, tool_calls)`` of the assistant turn.
+
+        Raises:
+            LLMError: Non-2xx reply (address, status, server reply; never the credential) or an
+                unreachable server.
+        """
+        async with self._stream_post("/chat/completions", payload) as response:
             return await self._stream_openai_tools_response(response, on_delta)
 
     async def chat_with_tools(
@@ -211,6 +290,33 @@ class LlamaSwapAPIClient(LLMClient):
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
+        """Run the tool loop and return the final answer text.
+
+        Each round sends the merged settings spread top-level; a truthy ``response_format``
+        parameter is sent and replaces the ``response_format`` setting, otherwise the setting
+        (if set) is sent, on every round (DEC-001-15). A null content becomes ``""`` both in the
+        final answer and in the assistant tool-call turn appended to the next round's
+        conversation (DEC-001-12). Streamed rounds go through ``_tools_stream_request``.
+
+        Args:
+            messages: Conversation turns.
+            tools_definitions: Advertised tool definitions (OpenAI function format).
+            tools: Callables by tool name; every advertised tool must have one.
+            system: Optional system prompt, inserted as the first turn.
+            max_loops: Maximum number of rounds.
+            options: Per-call settings.
+            stream: Stream each round.
+            on_delta: Receiver of streamed text pieces; its failure propagates unchanged.
+            response_format: Response format for this call; wins over the setting.
+
+        Returns:
+            The final answer text (never ``None``).
+
+        Raises:
+            ValueError: A tool callable is missing or a call carries bad arguments.
+            RuntimeError: A tool failed, or the loop exceeded ``max_loops``.
+            LLMError: Request failure.
+        """
         advertised = {d["function"]["name"] for d in tools_definitions}
         missing = advertised - tools.keys()
         if missing:
@@ -234,6 +340,8 @@ class LlamaSwapAPIClient(LLMClient):
                     "stream": stream,
                     **opt,
                 }
+                # DEC-001-15: applied after the settings spread, so a truthy parameter replaces the
+                # ``response_format`` setting on every round; without it the setting (if any) stays.
                 if response_format:
                     payload["response_format"] = response_format
 
@@ -246,8 +354,12 @@ class LlamaSwapAPIClient(LLMClient):
                     assistant_msg = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]
                     tool_calls = assistant_msg.get("tool_calls") or []
 
+                # DEC-001-12: a missing or null content is empty text, both for the final answer and
+                # for the assistant tool-call turn recorded in the conversation.
+                content_text = assistant_msg.get("content") or ""
+
                 if not tool_calls:
-                    final = assistant_msg.get("content", "")
+                    final = content_text
                     msgs.append({"role": "assistant", "content": final})
                     t.log_response(final)
                     return final
@@ -255,7 +367,7 @@ class LlamaSwapAPIClient(LLMClient):
                 msgs.append(
                     {
                         "role": "assistant",
-                        "content": assistant_msg.get("content", ""),
+                        "content": content_text,
                         "tool_calls": tool_calls,
                     }
                 )

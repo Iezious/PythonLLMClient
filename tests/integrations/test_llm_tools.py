@@ -6,6 +6,18 @@ from llm.llama_swap import LlamaSwapAPIClient
 from llm.openai import OpenAIAPIClient
 
 
+def _openai_api_key() -> str:
+    """Return the OpenAI key from the test's own environment, skipping the test when absent.
+
+    Step 004 DoD-20: the test reads the key and passes it as ``bearer_token``; the library never
+    reads the environment itself (DEC-001-6).
+    """
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPEN_AI_KEY")
+    if not key:
+        pytest.skip("OPENAI_API_KEY / OPEN_AI_KEY not set")
+    return key
+
+
 TOOLS_DEFINITIONS = [
     {
         "type": "function",
@@ -40,11 +52,10 @@ TOOLS_DEFINITIONS = [
 
 @pytest.mark.asyncio
 async def test_openai_chat_with_tools():
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIAPIClient(model=model, bearer_token=api_key)
     called = {"fetch_record": False, "query_index": False}
 
     def _fetch_record(key: str) -> str:

@@ -5,6 +5,18 @@ from llm.message import LLMMessage
 from llm.openai import OpenAIAPIClient
 
 
+def _openai_api_key() -> str:
+    """Return the OpenAI key from the test's own environment, skipping the test when absent.
+
+    Step 004 DoD-20: the test reads the key and passes it as ``bearer_token``; the library never
+    reads the environment itself (DEC-001-6).
+    """
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPEN_AI_KEY")
+    if not key:
+        pytest.skip("OPENAI_API_KEY / OPEN_AI_KEY not set")
+    return key
+
+
 def assert_think_tags_well_formed(text: str) -> None:
     """If <think> tags are present, verify they are properly matched and ordered."""
     open_count = text.count("<think>")
@@ -165,12 +177,11 @@ async def test_llamaswap_thinking_streaming_with_tools():
 @pytest.mark.asyncio
 async def test_openai_o3mini_thinking_streaming():
     """Test that enable_thinking translates to reasoning_effort for o3-mini."""
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_THINKING_MODEL", "o3-mini")
 
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIAPIClient(model=model, bearer_token=api_key)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []
@@ -196,12 +207,11 @@ async def test_openai_o3mini_thinking_streaming():
 @pytest.mark.asyncio
 async def test_openai_o3mini_explicit_effort():
     """Test that explicit reasoning_effort overrides enable_thinking default."""
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_THINKING_MODEL", "o3-mini")
 
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIAPIClient(model=model, bearer_token=api_key)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []
@@ -225,11 +235,10 @@ async def test_openai_o3mini_explicit_effort():
 @pytest.mark.asyncio
 async def test_openai_streaming_no_thinking_tags():
     """Test that standard OpenAI streaming (no thinking model) produces no <think> tags."""
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIAPIClient(model=model, bearer_token=api_key)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []

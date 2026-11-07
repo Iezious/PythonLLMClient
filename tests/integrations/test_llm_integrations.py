@@ -12,6 +12,19 @@ LLAMA_SWAP_EMBED_MODEL = "bge-large-en-v1.5.i1-Q6_K"
 OPENAI_GEN_MODEL = "gpt-4o-mini"
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 
+
+def _openai_api_key() -> str:
+    """Return the OpenAI key from the test's own environment, skipping the test when absent.
+
+    Step 004 DoD-20: the test reads the key and passes it as ``bearer_token``; the library never
+    reads the environment itself (DEC-001-6).
+    """
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPEN_AI_KEY")
+    if not key:
+        pytest.skip("OPENAI_API_KEY / OPEN_AI_KEY not set")
+    return key
+
+
 @pytest.mark.asyncio
 async def test_llamaswap_generate():
     client = LlamaSwapAPIClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
@@ -66,9 +79,8 @@ async def test_llamaswap_get_models():
 
 @pytest.mark.asyncio
 async def test_openai_get_models():
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
-    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL)
+    api_key = _openai_api_key()  # DoD-20
+    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
     async with client:
         models = await client.get_models()
         assert isinstance(models, list)
@@ -80,9 +92,8 @@ async def test_openai_get_models():
 
 @pytest.mark.asyncio
 async def test_openai_generate():
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
-    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL)
+    api_key = _openai_api_key()  # DoD-20
+    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
     async with client:
         response = await client.generate("Say hello")
         assert isinstance(response, str)
@@ -90,9 +101,8 @@ async def test_openai_generate():
 
 @pytest.mark.asyncio
 async def test_openai_chat():
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
-    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL)
+    api_key = _openai_api_key()  # DoD-20
+    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
     messages = [{"role": "user", "content": "What is the capital of Japan?"}]
     async with client:
         response = await client.chat(messages)
@@ -101,9 +111,8 @@ async def test_openai_chat():
 
 @pytest.mark.asyncio
 async def test_openai_embed():
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
-    client = OpenAIAPIClient(model=OPENAI_EMBED_MODEL)
+    api_key = _openai_api_key()  # DoD-20
+    client = OpenAIAPIClient(model=OPENAI_EMBED_MODEL, bearer_token=api_key)
     async with client:
         vector = await client.embed("Test embedding")
         assert isinstance(vector, list)
@@ -112,9 +121,8 @@ async def test_openai_embed():
 
 @pytest.mark.asyncio
 async def test_openai_embed_batch():
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
-    client = OpenAIAPIClient(model=OPENAI_EMBED_MODEL)
+    api_key = _openai_api_key()  # DoD-20
+    client = OpenAIAPIClient(model=OPENAI_EMBED_MODEL, bearer_token=api_key)
     texts = ["Batch text A", "Batch text B"]
     async with client:
         # Get batch vectors

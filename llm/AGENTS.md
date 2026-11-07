@@ -4,31 +4,31 @@
 
 The package: base client with shared HTTP/SSE/option-merge plumbing, backend clients (llama-swap, OpenAI, deprecated Ollama), typed option and message shapes, tool helper, tracer, factory and template helpers, public exports.
 
-## Contents
+## Glossary
 
 **Files:**
-- `__init__.py` — public exports and `__version__`.
-- `exceptions.py` — `LLMError`, raised for non-2xx responses and client-side errors.
+- `__init__.py` — public exports and `__version__` (kept in step with `pyproject.toml`).
+- `exceptions.py` — `LLMError`, raised for non-2xx responses, transport failures, in-stream error frames, early stream end and other client-side errors.
 - `message.py` — `LLMMessage` TypedDict for one conversation message.
 - `options.py` — typed option dicts (`BaseLLMOptions`, `OllamaOptions`, `OpenAIOptions`).
-- `llm_client.py` — `LLMClient` base: session lifecycle, `_request`, SSE parsing, tool loop, option-merge base; unsupported methods raise `NotImplementedError`.
-- `openai.py` — `OpenAIAPIClient` for OpenAI and OpenAI-compatible servers.
+- `llm_client.py` — `LLMClient` base: session lifecycle, `_request` (non-streaming) and `_stream_post` (the one way a streamed request is opened), the SSE reader `_iter_sse_data`, the shared chat/tool stream parsers with error-frame and early-end checks, tool loop, option-merge base; unsupported methods raise `NotImplementedError`.
+- `openai.py` — `OpenAIAPIClient` for OpenAI and OpenAI-compatible servers; takes its credential only from the `bearer_token` argument and never from the environment.
 - `llama_swap.py` — `LlamaSwapAPIClient` for llama-swap (primary backend).
 - `ollama.py` — `OllamaAPIClient`, deprecated, observation-only.
 - `tools.py` — `pydantic_to_openai_tool` helper that builds a tool definition from a pydantic model.
 - `trace.py` — `LLMTracer`, env-driven trace logging of LLM calls.
-- `llm.py` — `get_llm_client` factory, placeholder-template helpers, retired CLI smoke test.
+- `llm.py` — `get_llm_client` factory (forwards the app's credential to the OpenAI client), placeholder-template helpers, retired CLI smoke test.
 - `py.typed` — PEP 561 typing marker.
 
-See also: `docs/architecture/subsystems.md`, `docs/architecture/interfaces.md`, `docs/architecture/data-model.md`; decisions (`docs/decisions/000.legacy.md`) by file:
-- `llm_client.py` — DEC-000-2, 4, 5, 9, 11, 12, 13, 14, 15, 17, 20, 21, 22, 23, 24, 25, 32, 33, 34, 40, 41, 50; DEC-000-16 (withdrawn)
-- `openai.py`, `llama_swap.py` — DEC-000-2 (openai), 5, 6, 7, 8, 9, 10, 12, 14, 15, 18 (llama-swap), 19, 23, 25, 26, 27, 28, 29, 30, 33, 35, 36, 37, 38, 39, 40, 41, 48, 49
+See also: `docs/architecture/subsystems.md`, `docs/architecture/interfaces.md`, `docs/architecture/data-model.md`; decisions by file (`docs/decisions/000.legacy.md` for DEC-000, `docs/decisions/001.core-fixes.md` for DEC-001):
+- `llm_client.py` — DEC-000-2, 4, 5, 9, 11, 12, 13, 14, 15, 17, 20, 21, 22, 23, 24, 25, 32, 33, 34, 40, 41, 50; DEC-000-16 (withdrawn); DEC-001-1, 7, 8, 9, 10, 11
+- `openai.py`, `llama_swap.py` — DEC-000-2 (openai), 5, 6, 7, 8, 9, 10, 12, 14, 15, 18 (llama-swap), 19, 23, 25, 26, 27, 28, 29, 30, 33, 35, 36, 37, 38, 39, 40, 41, 48, 49; DEC-001-2, 6 (openai), 8, 12, 13, 14, 15, 16
 - `ollama.py` — DEC-000-6, 7, 9, 14, 15, 25, 26, 27, 28, 29, 30, 36, 37, 38, 41, 42, 49
-- `options.py` — DEC-000-7, 17, 18
+- `options.py` — DEC-000-7, 17, 18; DEC-001-14
 - `tools.py` — DEC-000-31, 43
 - `trace.py` — DEC-000-4, 9, 11, 44, 45, 46, 47, 48, 49, 50
-- `llm.py` — DEC-000-1, 3, 14, 15, 51, 52
-- `__init__.py` — DEC-000-18, 31, 43, 50, 51, 53
+- `llm.py` — DEC-000-1, 3, 14, 15, 51, 52; DEC-001-5
+- `__init__.py` — DEC-000-18, 31, 43, 50, 51, 53; DEC-001-4
 
 <!-- agent-ready:end -->
 

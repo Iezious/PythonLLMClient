@@ -1,3 +1,7 @@
+"""Client factory, prompt placeholder helpers and the retired CLI smoke test.
+
+Builds the right backend client from a server kind (``get_llm_client``) and fills prompt templates.
+"""
 # ---------------------------------------------------------------------------
 # Client Factory
 # ---------------------------------------------------------------------------
@@ -20,12 +24,29 @@ def get_llm_client(
     bearer_token: Optional[str] = None,
     default_options: Optional[Dict[str, Any]] = None,
 ) -> LLMClient:
-    """Factory function to get the appropriate LLM client."""
+    """Build the client for ``server_type``, forwarding every argument to its constructor.
+
+    Args:
+        server_type: Exact backend kind: ``"ollama"``, ``"openai"`` or ``"llamaswap"``.
+        base_url: API root of the server.
+        model: Model name sent with every request.
+        timeout: Total per-request timeout in seconds.
+        bearer_token: The app's credential, forwarded unchanged to every backend (``None`` builds
+            a client without one).
+        default_options: Client-level settings, merged under per-call settings.
+
+    Returns:
+        The constructed client; no network call is made.
+
+    Raises:
+        ValueError: ``server_type`` is not a supported kind; the message names it.
+    """
     if server_type == "ollama":
         return OllamaAPIClient(model, base_url, timeout, bearer_token, default_options)
     elif server_type == "openai":
-        # For OpenAI, the token is now read from the environment variable within the client
-        return OpenAIAPIClient(model, base_url, timeout, default_options=default_options)
+        # The app owns the credential; the factory forwards it like every other branch and the
+        # library never reads it from the environment (DEC-001-5).
+        return OpenAIAPIClient(model, base_url, timeout, bearer_token, default_options)
     elif server_type == "llamaswap":
         return LlamaSwapAPIClient(model, base_url, timeout, bearer_token, default_options)
     else:
