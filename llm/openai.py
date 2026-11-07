@@ -2,11 +2,19 @@
 
 Fixes from feature 001: credential only from ``bearer_token``, streamed requests via ``_stream_post``,
 null reply content as empty text, and only app-set settings sent.
+Feature 002 step 001: the tool loop maps an unoffered tool, unreadable arguments and an
+unserialisable result to ``LLMError`` and names the round limit in its error (DEC-002-2..5).
+Feature 002 step 003: embeddings and model-list replies are checked, embeddings ordered by
+position, and unreadable bodies mapped to ``LLMError`` (DEC-002-8..10);
+``chat_json`` checks only the JSON parse (DEC-002-7).
 """
 
+from collections.abc import Mapping
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 import json
 import inspect
+
+import aiohttp
 
 from llm.llm_client import LLMClient
 from llm.exceptions import LLMError
@@ -33,6 +41,239 @@ _OPENAI_SUPPORTED_PARAMS: Dict[str, Any] = {
 _OPENAI_ALIAS_MAP = {
     "context_length": "max_tokens", # OpenAI uses max_tokens for context length
 }
+
+def _offered_tool_name(call: Any, offered: set[str]) -> str:
+    """Return the tool name of one requested call after checking it was offered.
+
+    Args:
+        call: One entry of the reply's ``tool_calls``; expected shape ``{"function": {"name": ...}}``.
+        offered: Names advertised in ``tools_definitions``.
+
+    Returns:
+        The requested name, guaranteed to be in ``offered``.
+
+    Raises:
+        LLMError: The name is missing or empty (also when the call or its ``function`` is not a
+            mapping), or it is not advertised, even when ``tools`` has a callable for it (DEC-002-3).
+    """
+    function = call.get("function") if isinstance(call, Mapping) else None
+    name = function.get("name") if isinstance(function, Mapping) else None
+    # A malformed call is reported as an empty name rather than a raw KeyError/TypeError.
+    if not name:
+        raise LLMError("The model requested a tool call with an empty tool name")
+    if not isinstance(name, str) or name not in offered:
+        raise LLMError(f"The model requested tool '{name}', which was not offered")
+    return name
+
+
+def _read_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
+    """Turn a requested call's arguments into the keyword mapping the tool is called with.
+
+    Args:
+        name: The (offered) tool name, used in the error message.
+        raw: The call's ``arguments`` value as received.
+
+    Returns:
+        ``{}`` for missing or empty arguments; a mapping as given; the decoded JSON object for text.
+
+    Raises:
+        LLMError: Text that is not JSON (chained from the decode error), JSON that is not an object,
+            or a value that is neither text nor a mapping; the description carries the reason
+            (DEC-002-4).
+    """
+    # Only None and "" count as "no arguments"; other falsy values (0, [], False) are unusable
+    # forms and fall through to the error below (DEC-002-4).
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"Arguments for tool '{name}' are not valid JSON", description=str(exc)) from exc
+        if not isinstance(decoded, dict):
+            raise LLMError(
+                f"Arguments for tool '{name}' are not a JSON object",
+                description=f"decoded to {type(decoded).__name__}",
+            )
+        return decoded
+    raise LLMError(
+        f"Arguments for tool '{name}' are not readable",
+        description=f"unsupported type {type(raw).__name__}",
+    )
+
+
+def _tool_result_text(name: str, result: Any) -> str:
+    """Turn a tool's return value into the tool message content.
+
+    Args:
+        name: The tool name, used in the error message.
+        result: The value the tool returned (already awaited).
+
+    Returns:
+        JSON text (non-ASCII kept unescaped) for a ``dict`` or ``list``; ``str(result)`` otherwise.
+
+    Raises:
+        LLMError: The ``dict`` or ``list`` cannot be serialised (chained from the error, DEC-002-5).
+    """
+    # Only dict/list are JSON-encoded, as before; other values (including non-dict mappings) keep
+    # their text form so an object with a custom __str__ is still sent as that text.
+    if not isinstance(result, (dict, list)):
+        return str(result)
+    try:
+        return json.dumps(result, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        # TypeError: a non-serialisable element; ValueError: a circular reference.
+        raise LLMError(f"Result of tool '{name}' cannot be serialised to JSON", description=str(exc)) from exc
+
+
+async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str, **kwargs: Any) -> Any:
+    """Send one non-streamed request for listing or embeddings and map an undecodable 2xx body.
+
+    Args:
+        client: The client whose ``_request`` seam sends the request.
+        operation: The operation phrase used in the error message (e.g. ``"embedding"``).
+        method: HTTP method.
+        path: Path below the client's base URL.
+        **kwargs: Passed to ``_request`` unchanged (e.g. ``json=payload``).
+
+    Returns:
+        Whatever ``_request`` returned: decoded JSON, or ``bytes`` for a non-JSON body.
+
+    Raises:
+        LLMError: The successful body could not be decoded as JSON (chained from the decode error,
+            DEC-002-10). An ``LLMError`` raised by ``_request`` (non-2xx, transport) passes through.
+    """
+    try:
+        return await client._request(method, path, **kwargs)
+    # DEC-002-10: only the two decode errors ``_request`` lets escape on a 2xx JSON body are mapped;
+    # a broad ValueError catch could swallow unrelated errors (003.context.md). ``_request`` is not edited.
+    except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
+        raise LLMError(f"Unreadable reply from OpenAI API when {operation}", description=str(exc)) from exc
+
+
+def _reply_text(response: Any) -> str:
+    """Return a reply as text for an error description; a bytes body is decoded with replacement."""
+    if isinstance(response, (bytes, bytearray)):
+        return bytes(response).decode("utf-8", errors="replace")
+    return str(response)
+
+
+def _reply_entries(response: Any, operation: str) -> list[Any]:
+    """Check that a listing or embeddings reply is a mapping with a list under ``data``.
+
+    Args:
+        response: The value ``_request`` returned.
+        operation: The operation phrase used in the error message.
+
+    Returns:
+        The ``data`` list, unchanged.
+
+    Raises:
+        LLMError: The reply is not a mapping (including a bytes body), has no ``data`` (the
+            pre-existing message, reply inline), or ``data`` is not a list.
+    """
+    if not isinstance(response, Mapping):
+        raise LLMError(
+            f"Invalid response from OpenAI API when {operation}: the reply is not a JSON object",
+            description=_reply_text(response),
+        )
+    if "data" not in response:
+        # Wording kept as before this step; older tests may match it (003.context.md § Message wording).
+        raise LLMError(f"Invalid response from OpenAI API when {operation}: {response}")
+    entries = response["data"]
+    if not isinstance(entries, list):
+        raise LLMError(
+            f"Invalid response from OpenAI API when {operation}: 'data' is not a list",
+            description=_reply_text(response),
+        )
+    return entries
+
+
+def _model_entries(response: Any, operation: str) -> list[Any]:
+    """Check a model-list reply (DEC-002-9) and return its entries unchanged, in server order.
+
+    Args:
+        response: The value ``_request`` returned.
+        operation: ``"listing models"`` or ``"fetching models"``, used in the error message.
+
+    Returns:
+        The ``data`` list, every entry a mapping with a non-empty string ``id``.
+
+    Raises:
+        LLMError: The reply shape is wrong (see ``_reply_entries``), an entry is not a mapping, or
+            an entry's ``id`` is missing, not a string or empty.
+    """
+    entries = _reply_entries(response, operation)
+    for position, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            raise LLMError(
+                f"Invalid response from OpenAI API when {operation}: model entry {position} is not an object",
+                description=_reply_text(response),
+            )
+        model_id = entry.get("id")
+        if not isinstance(model_id, str) or not model_id:
+            raise LLMError(
+                f"Invalid response from OpenAI API when {operation}: model entry {position} has no non-empty text id",
+                description=_reply_text(response),
+            )
+    return entries
+
+
+def _embedding_vectors(response: Any, count: int) -> list[Any]:
+    """Check an embeddings reply (DEC-002-8) and return one vector per text, in the texts' order.
+
+    Args:
+        response: The value ``_request`` returned.
+        count: The number of texts sent.
+
+    Returns:
+        ``count`` vectors, ordered by the entries' ``index`` when every entry carries an integer
+        one, otherwise in server order. Vector elements are not type-checked.
+
+    Raises:
+        LLMError: The reply shape is wrong (see ``_reply_entries``); an entry is not a mapping or
+            its ``embedding`` is missing, not a list or empty; the entry count differs from
+            ``count``; or all entries carry integer positions that are not exactly ``0..count-1``.
+    """
+    operation = "embedding"
+    entries = _reply_entries(response, operation)
+    for position, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            problem = "is not an object"
+        elif "embedding" not in entry or entry["embedding"] is None:
+            problem = "has no vector"
+        elif not isinstance(entry["embedding"], list):
+            problem = "has a vector that is not a list"
+        elif not entry["embedding"]:
+            problem = "has an empty vector"
+        else:
+            continue
+        raise LLMError(
+            f"Invalid response from OpenAI API when {operation}: entry {position} {problem}",
+            description=_reply_text(response),
+        )
+    if len(entries) != count:
+        raise LLMError(
+            f"Invalid response from OpenAI API when {operation}: {len(entries)} vectors returned for {count} texts",
+            description=_reply_text(response),
+        )
+    indices = [entry.get("index") for entry in entries]
+    # DEC-002-8: positions are used only when every entry has one; a bool is an int subclass but is
+    # not a position (003.context.md § Positions). Partial positions are ambiguous, so server order.
+    if not all(isinstance(index, int) and not isinstance(index, bool) for index in indices):
+        return [entry["embedding"] for entry in entries]
+    if sorted(indices) != list(range(count)):
+        raise LLMError(
+            f"Invalid response from OpenAI API when {operation}: positions are not exactly 0..{count - 1}",
+            description=_reply_text(response),
+        )
+    ordered: list[Any] = [None] * count
+    for index, entry in zip(indices, entries):
+        ordered[index] = entry["embedding"]
+    return ordered
+
 
 class OpenAIAPIClient(LLMClient):
     """Convenience layer over OpenAI's Chat Completions API.
@@ -92,20 +333,49 @@ class OpenAIAPIClient(LLMClient):
         return opts
 
     async def list_models(self) -> List[str]:
-        """
-        Fetches the list of available models from the OpenAI API.
-        """
-        response = await self._request("GET", "/models")
-        if "data" not in response:
-            raise LLMError(f"Invalid response from OpenAI API when listing models: {response}")
+        """Return the ids of the models the server offers, in the server's order.
 
-        return [model["id"] for model in response["data"]]
+        The reply is checked (DEC-002-9): it must be a mapping with a list under ``data``, and every
+        entry a mapping whose ``id`` is a non-empty string. The same rule as ``get_models``, so a
+        list accepted by one is accepted by the other. Untraced.
+
+        Returns:
+            The entries' ``id`` values, in the order the server sent them.
+
+        Raises:
+            LLMError: The request failed (non-2xx or transport; passed through unchanged from
+                ``_request``); the successful body could not be decoded as JSON (raised from the
+                decode error, DEC-002-10); the body is not a mapping (including a non-JSON body
+                returned as bytes); ``data`` is missing (existing "Invalid response from OpenAI API
+                when listing models" message) or not a list; or an entry is not a mapping or lacks
+                a non-empty string ``id``. New messages name the backend, the operation and what
+                was wrong; the reply goes in the description.
+        """
+        response = await _fetch_reply(self, "listing models", "GET", "/models")
+        entries = _model_entries(response, "listing models")
+        return [model["id"] for model in entries]
 
     async def get_models(self) -> List[Dict[str, Any]]:
-        response = await self._request("GET", "/models")
-        if "data" not in response:
-            raise LLMError(f"Invalid response from OpenAI API when fetching models: {response}")
-        return response["data"]
+        """Return the model records the server offers, exactly as sent.
+
+        The reply is checked with the same rule as ``list_models`` (DEC-002-9): a mapping with a
+        list under ``data``, every entry a mapping whose ``id`` is a non-empty string. Entries are
+        returned unchanged, in server order. Untraced.
+
+        Returns:
+            The ``data`` entries as the server sent them.
+
+        Raises:
+            LLMError: The request failed (non-2xx or transport; passed through unchanged from
+                ``_request``); the successful body could not be decoded as JSON (raised from the
+                decode error, DEC-002-10); the body is not a mapping (including a non-JSON body
+                returned as bytes); ``data`` is missing (existing "Invalid response from OpenAI API
+                when fetching models" message) or not a list; or an entry is not a mapping or lacks
+                a non-empty string ``id``.
+        """
+        response = await _fetch_reply(self, "fetching models", "GET", "/models")
+        entries = _model_entries(response, "fetching models")
+        return entries
 
     async def chat(
         self,
@@ -205,11 +475,16 @@ class OpenAIAPIClient(LLMClient):
         Sends the app's ``response_format`` setting when one is set, otherwise
         ``{"type": "json_object"}`` (DEC-001-2). Returns the reply content, or empty text when
         the server's content is null (DEC-001-12).
-        Note: response_schema is used for validation but not sent to OpenAI,
-              as their native JSON mode does not use a schema directly.
+        When ``response_schema`` is given, the only check is that the reply text parses as JSON
+        (DEC-002-7, DEC-000-37): any valid JSON value (object, list, string, number, boolean or
+        null) is returned unchanged; the schema's fields are not checked. Without
+        ``response_schema`` the text is returned without any check. The schema is not sent
+        (US-040, out of scope).
 
         Raises:
-            LLMError: Request failure, or ``response_schema`` given and the reply is not valid JSON.
+            LLMError: Request failure, or ``response_schema`` given and the reply is not valid JSON
+                ("LLM response was not valid JSON, despite requesting JSON mode.", parse error in
+                the description).
         """
         opt = self._merge_options(options=options)
 
@@ -237,17 +512,11 @@ class OpenAIAPIClient(LLMClient):
             response_content = content if content is not None else ""
             t.log_response(response_content)
 
-        # Although OpenAI enforces JSON, we can optionally validate against a more specific schema
+        # DEC-002-7: the only check is the JSON parse; any valid JSON value passes unchanged.
+        # TypeError stays caught because a non-string content cannot be parsed.
         if response_schema:
             try:
-                parsed_json = json.loads(response_content)
-                # Basic check: ensure all keys in schema are in the response if they don't have defaults
-                # This is a simplistic validation. For full validation, a library like jsonschema would be needed.
-                if "properties" in response_schema:
-                    for key, prop_details in response_schema["properties"].items():
-                        if "default" not in prop_details and key not in parsed_json:
-                            # For simplicity, we are not raising an error here, but logging would be appropriate.
-                            pass
+                json.loads(response_content)
             except (json.JSONDecodeError, TypeError) as e:
                 raise LLMError(
                     "LLM response was not valid JSON, despite requesting JSON mode.",
@@ -299,10 +568,31 @@ class OpenAIAPIClient(LLMClient):
         (DEC-001-15). Null content of the final answer, and of a recorded assistant tool-call
         turn, becomes empty text (DEC-001-12). Streamed rounds go through ``_tools_stream_request``.
 
+        Each requested tool call is handled in order: offered-tool check, argument reading,
+        ``log_tool_call``, argument-name check, run, result conversion, ``log_tool_result``.
+
+        - Offered-tool check: a missing, empty or not-advertised name (not in
+          ``tools_definitions``) raises ``LLMError`` naming the requested name, even when ``tools``
+          has a callable under that name; the tool is not run (DEC-002-3). A call without a
+          ``function`` key or name counts as an empty name.
+        - Argument reading: missing or empty arguments mean no arguments; a mapping is used as
+          given; text is decoded as JSON and must give a JSON object. Undecodable text, a
+          non-object JSON value, or any other type raises ``LLMError`` naming the tool, with the
+          reason in its description; the tool is not run (DEC-002-4).
+        - Result conversion: a mapping or list becomes JSON text with non-ASCII kept unescaped; a
+          failed serialisation raises ``LLMError`` naming the tool (DEC-002-5). Anything else
+          becomes ``str(result)``. This conversion is outside the wrap that turns a tool's own
+          exception into ``RuntimeError``.
+        - Round limit: when ``max_loops`` rounds pass without a final answer, ``RuntimeError`` is
+          raised whose message states the round limit was reached, contains ``max_loops`` and
+          the configured value (DEC-002-2). No partial answer is returned.
+
         Raises:
-            ValueError: An advertised tool has no callable, or a tool call has bad arguments.
-            RuntimeError: A tool fails, or ``max_loops`` is exceeded.
-            LLMError: Request failure.
+            ValueError: An advertised tool has no callable (before any request), or a call's
+                argument names do not fit the callable (the tool is not run).
+            RuntimeError: A tool raises (message names the tool), or the round limit is reached.
+            LLMError: Request failure; a requested tool not offered or with an empty name; unreadable
+                arguments; an unserialisable mapping or list result.
         """
         advertised = {d["function"]["name"] for d in tools_definitions}
         missing = advertised - tools.keys()
@@ -360,11 +650,11 @@ class OpenAIAPIClient(LLMClient):
                 )
 
                 for call in tool_calls:
-                    name = call["function"]["name"]
+                    # Step 001 order: offered check, then argument reading, both before the tool can
+                    # run; calls earlier in this reply have already run and keep their effects.
+                    name = _offered_tool_name(call, advertised)
                     func = tools[name]
-                    kwargs = call["function"].get("arguments") or {}
-                    if isinstance(kwargs, str):
-                        kwargs = json.loads(kwargs)
+                    kwargs = _read_tool_arguments(name, call["function"].get("arguments"))
                     t.log_tool_call(name, kwargs)
                     if not all(k in inspect.signature(func).parameters for k in kwargs):
                         raise ValueError(f"Bad args for tool '{name}': {kwargs}")
@@ -375,7 +665,9 @@ class OpenAIAPIClient(LLMClient):
                     except Exception as exc:
                         raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
 
-                    content = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+                    # Outside the try above, so a conversion failure stays LLMError and is not
+                    # reported as the tool's own failure (DEC-002-5).
+                    content = _tool_result_text(name, result)
                     t.log_tool_result(name, content)
                     tool_message: Dict[str, Any] = {"role": "tool", "content": content}
                     tool_call_id = call.get("id")
@@ -383,7 +675,8 @@ class OpenAIAPIClient(LLMClient):
                         tool_message["tool_call_id"] = tool_call_id
                     msgs.append(tool_message)
 
-        raise RuntimeError("Tool loop exceeded max_loops -- possible infinite cycle.")
+        # DEC-002-2: stays RuntimeError and outside the trace session; the text keeps `max_loops`.
+        raise RuntimeError(f"Tool loop reached its round limit (max_loops={max_loops}) without a final answer")
 
     async def embed_batch(
         self,
@@ -391,6 +684,37 @@ class OpenAIAPIClient(LLMClient):
         *,
         options: Optional[OpenAIOptions] = None,
     ) -> List[List[float]]:
+        """Embed a batch of texts and return one vector per text, in the texts' order.
+
+        Sends ``{"model", "input": texts}`` plus ``user`` when set in call-time or default options;
+        other settings are not sent. The empty batch is still sent. Inside the trace session, the
+        reply is checked before the response count is recorded (DEC-002-8): it must be a mapping
+        with a list under ``data``; every entry a mapping whose ``embedding`` is a non-empty list
+        (elements are not type-checked); the number of entries equal to ``len(texts)``. When every
+        entry carries an integer ``index`` (a boolean does not count), the indices must be exactly
+        ``0..n-1`` and the vectors are returned in index order; otherwise the server's order is
+        kept. The count recorded in the trace is the validated count.
+
+        Args:
+            texts: The texts to embed.
+            options: Per-call settings; only ``user`` is used.
+
+        Returns:
+            Exactly ``len(texts)`` vectors; vector ``i`` belongs to ``texts[i]`` when the server
+            sent positions, otherwise the server's order.
+
+        Raises:
+            LLMError: The request failed (non-2xx or transport; passed through unchanged from
+                ``_request``); the successful body could not be decoded as JSON (raised from the
+                decode error, DEC-002-10); the body is not a mapping (including a non-JSON body
+                returned as bytes); ``data`` is missing (existing "Invalid response from OpenAI API
+                when embedding" message) or not a list; an entry is not a mapping or its
+                ``embedding`` is missing, not a list or empty; the entry count differs from the
+                number of texts; or all entries carry integer positions that are not exactly
+                ``0..n-1`` (duplicate, gap or out of range). New messages name the backend, the
+                operation and what was wrong; the reply goes in the description. Raised inside the
+                trace session, so it is recorded as an ERROR section.
+        """
         # For embeddings, we only want model and input.
         # Sampling parameters like temperature are for completions.
         payload = {
@@ -405,9 +729,10 @@ class OpenAIAPIClient(LLMClient):
 
         with self._tracer.trace("embed_batch", self.model) as t:
             t.log_request("POST", "/embeddings", payload)
-            response = await self._request("POST", "/embeddings", json=payload)
-            if "data" not in response:
-                raise LLMError(f"Invalid response from OpenAI API when embedding: {response}")
-            t.log_response(f"{len(response['data'])} embeddings returned")
+            response = await _fetch_reply(self, "embedding", "POST", "/embeddings", json=payload)
+            # DEC-002-8: checked inside the session so a violation is recorded as ERROR, and
+            # before log_response so the recorded count is the validated one.
+            vectors = _embedding_vectors(response, len(texts))
+            t.log_response(f"{len(vectors)} embeddings returned")
 
-        return [item["embedding"] for item in response["data"]]
+        return vectors

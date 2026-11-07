@@ -510,8 +510,24 @@ class LLMClient:
     ) -> tuple[str, list[dict]]:
         """Parse an OpenAI streaming response that may contain tool_calls.
 
-        Accumulates tool_call deltas by index and calls on_delta for content chunks.
+        Assembles streamed tool_call fragments into calls and calls on_delta for content chunks.
         Returns (content, tool_calls) where tool_calls is empty for final answer rounds.
+
+        Tool-call fragments are grouped per round as follows (DEC-002-6):
+
+        - **Positioned fragments** (an integer ``index``) belong to the call at that position. A truthy
+          ``id`` is set on the call. A non-empty ``function.name`` is set, not appended, so a name repeated
+          in every fragment appears once. Non-empty ``function.arguments`` text is appended.
+        - **Positionless fragments** (``index`` missing or not an integer) are matched against the current
+          positionless call, the last one started. A fragment starts a new call when it carries an id
+          different from the current call's non-empty id, or when it carries no id but a non-empty name
+          while the current call already has a name. A fragment carrying the same id as the current call
+          continues it (its name is set, so a repeated name is harmless). Otherwise the fragment continues
+          the current call; with no current call it starts one.
+        - **Order**: positioned calls sorted by position, then positionless calls in order of appearance.
+
+        Every call has the shape ``{"id": str, "type": "function", "function": {"name": str,
+        "arguments": str}}``; ``id`` is ``""`` when the server sent none.
 
         `reasoning_content` deltas are streamed through on_delta wrapped in <think>/</think>
         tags, exactly as _stream_openai_chat_response does. Unlike that method, the reasoning
@@ -525,8 +541,8 @@ class LLMClient:
 
         Reads data payloads from ``self._iter_sse_data(response)`` and never touches ``response`` itself.
         ``[DONE]`` ends the stream. A payload that is not JSON, is JSON but not an object, or is an object
-        with neither ``choices`` nor ``error`` is skipped (DEC-001-9). Tool-call fragment accumulation by
-        index is unchanged (DEC-000-32).
+        with neither ``choices`` nor ``error`` is skipped (DEC-001-9). Tool-call fragment grouping follows
+        DEC-002-6 above (supersedes the open part of DEC-000-32).
 
         Args:
             response: The open streamed response, passed through to the reader.
@@ -534,8 +550,9 @@ class LLMClient:
                 is awaited (DEC-000-23).
 
         Returns:
-            ``(content, tool_calls)``: the content text without reasoning, and the tool calls sorted by
-            index (empty for a final-answer round).
+            ``(content, tool_calls)``: the content text without reasoning, and the assembled tool calls,
+            positioned calls by position then positionless calls in order of appearance (empty for a
+            final-answer round).
 
         Raises:
             LLMError: On an error frame, with the server's reason in the text (DEC-001-9). On an early end:
@@ -545,8 +562,15 @@ class LLMClient:
                 (DEC-000-23).
         """
         content_chunks: List[str] = []
+        # DEC-002-6: positioned calls keyed by position; positionless calls kept in order of appearance,
+        # the last one being the "current" positionless call that new positionless fragments match against.
         tool_call_map: Dict[int, dict] = {}
+        positionless_calls: list[dict] = []
         in_reasoning = False
+
+        def new_tool_call() -> dict:
+            """Return an empty call in the shape the tool loop reads (id "" until the server sends one)."""
+            return {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
 
         async def emit(text: str) -> None:
             if on_delta:
@@ -569,15 +593,34 @@ class LLMClient:
             # Tool calls first and unconditionally: a single delta may carry both
             # reasoning_content and tool_calls, so reasoning must not short-circuit this.
             for tc in delta.get("tool_calls") or []:
-                idx = tc.get("index", 0)
-                if idx not in tool_call_map:
-                    tool_call_map[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-                entry = tool_call_map[idx]
-                if tc.get("id"):
-                    entry["id"] = tc["id"]
                 func = tc.get("function") or {}
-                if func.get("name"):
-                    entry["function"]["name"] += func["name"]
+                call_id = tc.get("id")
+                name = func.get("name")
+                idx = tc.get("index")
+                # 002.context Rules: only a real integer is a position; bool is excluded because
+                # True/False are not positions a server means to send.
+                if isinstance(idx, int) and not isinstance(idx, bool):
+                    if idx not in tool_call_map:
+                        tool_call_map[idx] = new_tool_call()
+                    entry = tool_call_map[idx]
+                else:
+                    current = positionless_calls[-1] if positionless_calls else None
+                    # DEC-002-6: a different non-empty id, or (without an id) a name arriving on a call that
+                    # already has one, starts a new call. A matching id continues the current call even when
+                    # the name is repeated, so servers that resend id and name in every fragment still work.
+                    if (
+                        current is None
+                        or (call_id and current["id"] and call_id != current["id"])
+                        or (not call_id and name and current["function"]["name"])
+                    ):
+                        current = new_tool_call()
+                        positionless_calls.append(current)
+                    entry = current
+                if call_id:
+                    entry["id"] = call_id
+                # DEC-002-6: the name is set, not appended, so a name repeated in every fragment appears once.
+                if name:
+                    entry["function"]["name"] = name
                 if func.get("arguments"):
                     entry["function"]["arguments"] += func["arguments"]
 
@@ -607,7 +650,8 @@ class LLMClient:
             in_reasoning = False
             await emit("</think>")
 
-        tool_calls = [tool_call_map[i] for i in sorted(tool_call_map)]
+        # DEC-002-6 order: positioned calls by position, then positionless calls in order of appearance.
+        tool_calls = [tool_call_map[i] for i in sorted(tool_call_map)] + positionless_calls
         return "".join(content_chunks), tool_calls
 
     async def chat_with_tools(

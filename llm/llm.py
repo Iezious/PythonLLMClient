@@ -78,23 +78,52 @@ def substitute_placeholders(template: str, placeholders: Dict[str, str]) -> str:
 
 
 def recursive_format_placeholders(text: str, data: Dict[str, str | bytes | int | float | None | object]) -> str:
-    """Recursively formats a string with placeholders until no placeholders are left.
+    """Fill ``{{NAME}}`` slots in ``text`` from ``data``, pass after pass, until nothing more can be filled.
 
-    - Supports up to 10 passes to avoid runaway loops.
-    - Lazily evaluates callables in the mapping.
-    - Coerces non-string values via str().
+    Each pass finds the ``{{NAME}}`` slots in the current text and replaces every slot whose name is in
+    ``data`` (membership test, then subscription). A value that itself contains a known slot is filled on a
+    later pass. Filling stops as soon as one of these holds (DEC-002-15):
+
+    - no slot is found in the text;
+    - a whole pass leaves the text unchanged (only unknown slots remain, or a slot refers to itself);
+    - 10 passes have run (the cap ends silently, without an error).
+
+    Args:
+        text: Template containing ``{{NAME}}`` slots.
+        data: Mapping of slot names to values. A callable value is called with no arguments, once per
+            occurrence per pass, and only when its slot appears; any other value is inserted as ``str(value)``.
+
+    Returns:
+        The filled text. Unknown slots and self-referring slots are returned as written, without an error.
+
+    Raises:
+        Any exception raised by a callable value passes through unchanged.
     """
     import re
-    # Safer, iterative replacement to avoid runaway recursion
+
+    def _fill(match: "re.Match[str]") -> str:
+        """Return the text for one slot occurrence: its value as text, or the slot as written if unknown."""
+        key = match.group(1)
+        # Membership test, then subscription (Step 005 context): a mapping that counts lookups observes
+        # exactly one test per slot occurrence per pass.
+        if key in data:
+            value = data[key]
+            return str(value() if callable(value) else value)
+        return match.group(0)
+
     out = text
+    # The 10-pass cap stays as the guard against values that keep growing (DEC-002-15).
     for _ in range(10):
-        found = re.findall(r"{{(\w+)}}", out)
-        if not found:
+        if not re.search(r"{{(\w+)}}", out):
             break
-        for key in found:
-            if key in data:
-                val = data[key]() if callable(data[key]) else data[key]
-                out = out.replace(f"{{{{{key}}}}}", str(val))
+        # One substitution over the pass-start text: only slots present when the pass begins are filled,
+        # so a slot introduced by a value waits for the next pass (one nesting level per pass).
+        filled = re.sub(r"{{(\w+)}}", _fill, out)
+        # A pass that changes nothing means only unknown or self-referring slots remain; another pass
+        # would repeat the same lookups and computations for nothing (DEC-002-15).
+        if filled == out:
+            break
+        out = filled
     return out
 
 
