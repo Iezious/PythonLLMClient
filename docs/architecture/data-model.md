@@ -15,6 +15,8 @@ A message is a dictionary with required `role` and `content` strings, used by `c
 | OpenAI, llama-swap | `role: assistant`, `content`, `tool_calls` | `role: tool`, `content`, `tool_call_id` (when the backend supplied an id) |
 | Ollama (**deprecated**) | not appended | `role: tool`, `name`, `content` |
 
+The message shape and the internal turn shapes above are the same on both OpenAI-family protocols (planned). A Responses class converts them to and from the protocol's input and output items on the wire. Reasoning carried between tool rounds is not a message and is never added to the conversation (see `subsystems.md`, Tool loop).
+
 ## Tool definition
 
 All backends take the OpenAI function-tool shape:
@@ -25,6 +27,8 @@ All backends take the OpenAI function-tool shape:
 ```
 
 `tools` passed to `chat_with_tools` is a mapping from tool name to callable.
+
+This shape is accepted on both OpenAI-family protocols (planned). A Responses class converts it to the protocol's tool shape. The same applies to the `response_format` shape (`json_object` / `json_schema`). Mapping details are in DEC-arch-10.
 
 ## Settings
 
@@ -51,9 +55,19 @@ Key meanings that need a note: `enable_thinking` toggles reasoning (OpenAI: tran
 
 `context_length` means context size on Ollama but an output-token cap on OpenAI and llama-swap (see `quick-reference.md`, Open).
 
+The keys above describe today's OpenAI and llama-swap clients. In the target shape they belong to the chat-completions classes.
+
+**Responses classes (planned).** They accept the same app-facing keys as the chat-completions classes, and each class has its own supported table. Differences:
+
+- No built-in values: only keys the app set are sent.
+- Each key is translated to its Responses counterpart, for example the output-token cap and the thinking switch.
+- A key with no Responses counterpart is not sent, and the ignored-setting warning is emitted (see `interfaces.md`, Exposed: warnings).
+
+The key-by-key mapping and the open thinking-off and llama-swap points are in DEC-arch-8.
+
 ## Reasoning tag convention
 
-Reasoning text is delimited in returned or streamed text as `<think>` ... `</think>`. Applies to streaming only (see `subsystems.md`).
+Reasoning text is delimited in returned or streamed text as `<think>` ... `</think>`. Applies to streaming only (see `subsystems.md`). The same convention applies on both OpenAI-family protocols (planned). On Responses, the reasoning text and the reasoning summary the server streams both become marked reasoning.
 
 ## Trace record
 

@@ -6,7 +6,7 @@ Contracts the library exposes to callers and the backend APIs it consumes. Data 
 
 ## Exposed: client method contract
 
-All methods are async and defined on `LLMClient`; each backend client implements them. `OllamaAPIClient` is **deprecated**.
+All methods are async and defined on `LLMClient`; each backend client implements them. `OllamaAPIClient` is **deprecated**. The contract below is the same on both OpenAI-family protocols (planned): Responses and chat completions differ only in the rows of the protocol matrix further down.
 
 | Method | Contract |
 |---|---|
@@ -63,15 +63,37 @@ Per-method behaviour that varies by backend is in the capability matrix below.
 | Tool-result message identity | tool `name` | `tool_call_id` | `tool_call_id` |
 | Tool-call argument encoding | mapping | JSON string | JSON string |
 
-OpenAI and llama-swap differ only in: auth requirement, thinking control, and default address.
+OpenAI and llama-swap differ only in: auth requirement, thinking control, and default address. The OpenAI and llama-swap columns above describe today's behaviour, which is chat completions. In the target shape that behaviour belongs to the chat-completions classes.
+
+### Protocol axis, OpenAI family (planned)
+
+Rows that differ between the two protocols. All other rows of the matrix above hold for both.
+
+| Capability | Responses (`OpenAIAPIClient`, `LlamaSwapAPIClient`) | Chat completions (`OpenAIChatCompletionsClient`, `LlamaSwapChatCompletionsClient`) |
+|---|---|---|
+| Chat route | `POST /responses` | `POST /chat/completions` |
+| `chat_json` request | the protocol's JSON text-format setting; the caller's `response_format` shape is accepted unchanged and translated | `response_format` of type `json_object` |
+| `response_format` in tool chat | translated to the protocol's text-format setting | passed through |
+| Thinking control | thinking on/off and an explicit effort map to the protocol's reasoning setting (OpenAI); how llama-swap receives it is settled in planning (DEC-arch-8, open) | as in the matrix above |
+| Settings sent | only those the app set; a setting with no counterpart is ignored with the warning | built-in values plus those the app set (known defect, DEC-000-6) |
+| Reasoning carried between tool rounds | yes, within one call, never into the caller's conversation or the answer | no |
+| Reasoning and content in one streamed piece | not applicable (they arrive separately) | content lost (known defect, DEC-000-21) |
+| Streamed non-2xx reply | `LLMError` with address and server reply | `LLMError` with address and server reply |
+| Failure reported inside the stream | `LLMError` with the server's reason | skipped silently (known defect, DEC-000-13) |
 
 On the deprecated Ollama client, `stream=True` raises `ValueError` and passing `on_delta` raises `TypeError`.
 
 ## Exposed: factory
 
-`get_llm_client(server_type, base_url, model, timeout, bearer_token, default_options)` returns an `LLMClient`.
+`get_llm_client(server_type, base_url, model, timeout, bearer_token, default_options)` returns an `LLMClient`. Target shape (planned): the factory also takes a `protocol` argument.
 
 - `server_type` is one of `ollama` (deprecated), `openai`, `llamaswap`; any other value raises `ValueError`.
+- `protocol` (planned) selects the class for `openai` and `llamaswap`:
+  - `responses` (the default) → `OpenAIAPIClient` / `LlamaSwapAPIClient`
+  - `chat_completions` → `OpenAIChatCompletionsClient` / `LlamaSwapChatCompletionsClient`
+  - Any other value raises `ValueError`.
+  - Passing a protocol with `ollama` is refused with `ValueError`, because Ollama offers no protocol choice.
+  - Details are in DEC-arch-4.
 - `base_url` is required at the factory; the client constructors have their own default address.
 - The factory forwards the caller's credential (`bearer_token`) to every backend. The library never reads a credential from the environment. The OpenAI client refuses to be created without a credential (`ValueError`); llama-swap and Ollama accept none.
 - Known defect: today the OpenAI branch drops the caller's credential and reads the environment instead; see `quick-reference.md`, Open.
@@ -86,6 +108,14 @@ The supported surface is the package top level.
 - Typed settings shapes and the message shape are public; top-level export is pending (see `data-model.md`, Settings).
 - `LLMTracer` is a supported surface: an application may open a trace session with any operation label and log to it (see `subsystems.md`).
 
+## Exposed: warnings (planned)
+
+The library exports its own warning category, a kind of user warning, that applications can filter or escalate.
+
+- A Responses class emits it when the app set a setting that has no counterpart on the Responses protocol. The setting is not sent, and the call goes ahead.
+- The library chose a warning rather than logging, so the signal shows up without any logging set up by the app. The mechanism and the once-per-setting-per-client rule are in DEC-arch-6.
+- _TBD: the category's exported name is settled in planning._
+
 ## Exposed: error contract
 
 Rule: unless the table below names another error, a failure of a library operation reaches the caller as `LLMError` (`message`, optional `description`; text form is `message: description`). Error text carries the request address and the full server reply, and is recorded in the trace (accepted). There are no retries.
@@ -93,12 +123,13 @@ Rule: unless the table below names another error, a failure of a library operati
 | Failure kind | Intended | Today |
 |---|---|---|
 | Non-2xx reply, non-streaming | `LLMError` | as intended |
-| Non-2xx reply, streaming chat and streaming tool rounds | `aiohttp.ClientResponseError`, without the server reply (accepted) | as intended |
+| Non-2xx reply, streaming chat and streaming tool rounds (both protocols) | `LLMError` carrying the request address and the server's reply, never the credential (planned; replaces the earlier accepted `aiohttp.ClientResponseError`, DEC-arch-5) | `aiohttp.ClientResponseError`, without the server reply |
+| Failure reported inside a Responses stream (planned protocol) | `LLMError` carrying the server's reason | not applicable until Responses is built |
 | Transport failure (server unreachable, timeout) | `LLMError` | aiohttp / asyncio exceptions pass through (known defect, see Open) |
 | 2xx reply that is not JSON | `LLMError` on model listing and embeddings; on chat-style calls a generic error (accepted) | not mapped on listing and embeddings (known defect, see Open) |
 | Reply with null content, non-streaming (streaming yields empty text) | empty text | `None` is returned (known defect, see Open) |
 | Reply missing the expected choice or message | generic error (accepted) | `KeyError` / `IndexError` / `TypeError` |
-| In-stream error piece, or stream that ends early | `LLMError` | skipped silently; the call returns what arrived (known defect, see Open) |
+| In-stream error piece, or stream that ends early (chat completions) | `LLMError` | skipped silently; the call returns what arrived (known defect, see Open) |
 | Tool offered without a callable | `ValueError`, before any request | as intended |
 | Tool requested that was not offered | `LLMError` | raw lookup error (known defect, see Open) |
 | Tool arguments unreadable | `LLMError` | raw decode error (known defect, see Open) |
@@ -137,13 +168,23 @@ Authentication on every request, when a token is present: `Authorization: Bearer
 
 | Route | Used for |
 |---|---|
-| `GET /models` | `list_models`, `get_models` (records under `data`) |
-| `POST /chat/completions` | all chat-style operations; options are top-level fields; optional `response_format` and `tools`; `stream` selects SSE |
-| `POST /embeddings` | `embed_batch` (array input, optional `user`; no sampling options) |
+| `GET /models` | `list_models`, `get_models` (records under `data`); both protocols |
+| `POST /responses` | planned: all chat-style operations on the Responses classes; the conversation is sent as input items; tool calls and their results travel as items; `stream` selects SSE with typed events |
+| `POST /chat/completions` | all chat-style operations (today on every OpenAI-family client; planned: on the chat-completions classes only); options are top-level fields; optional `response_format` and `tools`; `stream` selects SSE |
+| `POST /embeddings` | `embed_batch` (array input, optional `user`; no sampling options); both protocols |
 
-**SSE stream format** (OpenAI and llama-swap): `data: {json}` frames terminated by `data: [DONE]`. Only the first choice's `delta` is read, with `content`, `reasoning_content` and `tool_calls`; reasoning is read only from the dedicated `reasoning_content` field. Frames without `choices` and non-JSON frames are skipped today (known defect for error frames, see error contract).
+**Responses stream format** (planned): `data: {json}` frames, each a typed event. The type is read from the payload, so event-name lines need not be read. The events carry output text, reasoning, tool-call items and argument fragments, reasoning items to carry over, completion, and failure. A failure event ends the call with `LLMError`. The list of events and how each is handled are in DEC-arch-11. Fixed request fields (no storage, reasoning carry, reasoning summary) are in DEC-arch-7.
+
+**SSE stream format, chat completions** (OpenAI and llama-swap): `data: {json}` frames terminated by `data: [DONE]`. Only the first choice's `delta` is read, with `content`, `reasoning_content` and `tool_calls`; reasoning is read only from the dedicated `reasoning_content` field. Frames without `choices` and non-JSON frames are skipped today (known defect for error frames, see error contract).
 
 - Text is decoded incrementally. Known defect: a multi-byte character split between two reads is lost.
 - Line terminators and multi-line events are to be honoured. Known defect: a bare carriage-return terminator and multi-line events lose text.
 - Tool-call fragments are matched by their position and returned in order. Known defect: fragments without a position, or repeating the name in every fragment, merge into one broken call.
 - One total time limit bounds a whole stream, per server round.
+
+The decoding, terminator and time-limit rules above apply to both protocols, because they share the stream reader.
+
+## Decision history
+
+- 2026-11-07 — A non-2xx reply on a streamed request becomes `LLMError` with the server's reply on both protocols (planned). This replaces the accepted `aiohttp.ClientResponseError` row. See DEC-arch-5, superseding DEC-000-10.
+- 2026-11-07 — Factory `protocol` argument, protocol axis in the capability matrix, and the ignored-setting warning category added (planned). See DEC-arch-1, DEC-arch-4, DEC-arch-6.
