@@ -1,8 +1,8 @@
 import os
 import pytest
-from llm.llama_swap import LlamaSwapAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
 from llm.message import LLMMessage
-from llm.openai import OpenAIAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 
 def _openai_api_key() -> str:
@@ -40,7 +40,7 @@ async def test_llamaswap_thinking_streaming():
 
     model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
 
-    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+    client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []
@@ -78,7 +78,7 @@ async def test_llamaswap_thinking_tags_well_formed():
 
     model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
 
-    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+    client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []
@@ -114,7 +114,7 @@ async def test_llamaswap_thinking_streaming_with_tools():
 
     model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
 
-    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+    client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
     tools_definitions = [
         {
@@ -181,7 +181,7 @@ async def test_openai_o3mini_thinking_streaming():
 
     model = os.environ.get("OPENAI_THINKING_MODEL", "o3-mini")
 
-    client = OpenAIAPIClient(model=model, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []
@@ -211,7 +211,7 @@ async def test_openai_o3mini_explicit_effort():
 
     model = os.environ.get("OPENAI_THINKING_MODEL", "o3-mini")
 
-    client = OpenAIAPIClient(model=model, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []
@@ -238,7 +238,7 @@ async def test_openai_streaming_no_thinking_tags():
     api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
 
     messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
     chunks = []

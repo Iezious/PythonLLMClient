@@ -1,23 +1,23 @@
-"""OpenAI Chat Completions client: the app's credential, the shared request/stream helpers, typed settings.
+"""OpenAI Responses client: chat, generate and JSON-only answers over ``POST /responses``.
 
-Fixes from feature 001: credential only from ``bearer_token``, streamed requests via ``_stream_post``,
-null reply content as empty text, and only app-set settings sent.
-Feature 002 step 001: the tool loop maps an unoffered tool, unreadable arguments and an
-unserialisable result to ``LLMError`` and names the round limit in its error (DEC-002-2..5).
-Feature 002 step 003: embeddings and model-list replies are checked, embeddings ordered by
-position, and unreadable bodies mapped to ``LLMError`` (DEC-002-8..10);
-``chat_json`` checks only the JSON parse (DEC-002-7).
+Feature 003 step 002: settings translated to Responses fields and no-counterpart settings dropped
+with ``LLMSettingIgnoredWarning`` (DEC-003-6, DEC-003-9, DEC-003-10); request body and non-streamed
+reply handling per DEC-003-11 / DEC-003-12; tool chat refused (DEC-003-4). Step 003: streamed
+``chat`` / ``generate`` parse the Responses event stream (DEC-003-13). Model listing and
+embeddings are unchanged from the chat-completions client (US-057.AC-2), which now lives in
+``llm/openai_chat_completions.py``.
 """
 
 from collections.abc import Mapping
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 import json
 import inspect
+import warnings
 
 import aiohttp
 
 from llm.llm_client import LLMClient
-from llm.exceptions import LLMError
+from llm.exceptions import LLMError, LLMSettingIgnoredWarning
 from llm.message import LLMMessage
 from llm.options import OpenAIOptions
 
@@ -42,90 +42,11 @@ _OPENAI_ALIAS_MAP = {
     "context_length": "max_tokens", # OpenAI uses max_tokens for context length
 }
 
-def _offered_tool_name(call: Any, offered: set[str]) -> str:
-    """Return the tool name of one requested call after checking it was offered.
-
-    Args:
-        call: One entry of the reply's ``tool_calls``; expected shape ``{"function": {"name": ...}}``.
-        offered: Names advertised in ``tools_definitions``.
-
-    Returns:
-        The requested name, guaranteed to be in ``offered``.
-
-    Raises:
-        LLMError: The name is missing or empty (also when the call or its ``function`` is not a
-            mapping), or it is not advertised, even when ``tools`` has a callable for it (DEC-002-3).
-    """
-    function = call.get("function") if isinstance(call, Mapping) else None
-    name = function.get("name") if isinstance(function, Mapping) else None
-    # A malformed call is reported as an empty name rather than a raw KeyError/TypeError.
-    if not name:
-        raise LLMError("The model requested a tool call with an empty tool name")
-    if not isinstance(name, str) or name not in offered:
-        raise LLMError(f"The model requested tool '{name}', which was not offered")
-    return name
-
-
-def _read_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
-    """Turn a requested call's arguments into the keyword mapping the tool is called with.
-
-    Args:
-        name: The (offered) tool name, used in the error message.
-        raw: The call's ``arguments`` value as received.
-
-    Returns:
-        ``{}`` for missing or empty arguments; a mapping as given; the decoded JSON object for text.
-
-    Raises:
-        LLMError: Text that is not JSON (chained from the decode error), JSON that is not an object,
-            or a value that is neither text nor a mapping; the description carries the reason
-            (DEC-002-4).
-    """
-    # Only None and "" count as "no arguments"; other falsy values (0, [], False) are unusable
-    # forms and fall through to the error below (DEC-002-4).
-    if raw is None or raw == "":
-        return {}
-    if isinstance(raw, Mapping):
-        return dict(raw)
-    if isinstance(raw, str):
-        try:
-            decoded = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise LLMError(f"Arguments for tool '{name}' are not valid JSON", description=str(exc)) from exc
-        if not isinstance(decoded, dict):
-            raise LLMError(
-                f"Arguments for tool '{name}' are not a JSON object",
-                description=f"decoded to {type(decoded).__name__}",
-            )
-        return decoded
-    raise LLMError(
-        f"Arguments for tool '{name}' are not readable",
-        description=f"unsupported type {type(raw).__name__}",
-    )
-
-
-def _tool_result_text(name: str, result: Any) -> str:
-    """Turn a tool's return value into the tool message content.
-
-    Args:
-        name: The tool name, used in the error message.
-        result: The value the tool returned (already awaited).
-
-    Returns:
-        JSON text (non-ASCII kept unescaped) for a ``dict`` or ``list``; ``str(result)`` otherwise.
-
-    Raises:
-        LLMError: The ``dict`` or ``list`` cannot be serialised (chained from the error, DEC-002-5).
-    """
-    # Only dict/list are JSON-encoded, as before; other values (including non-dict mappings) keep
-    # their text form so an object with a custom __str__ is still sent as that text.
-    if not isinstance(result, (dict, list)):
-        return str(result)
-    try:
-        return json.dumps(result, ensure_ascii=False)
-    except (TypeError, ValueError) as exc:
-        # TypeError: a non-serialisable element; ValueError: a circular reference.
-        raise LLMError(f"Result of tool '{name}' cannot be serialised to JSON", description=str(exc)) from exc
+# Supported settings that have no Responses field (DEC-003-9): never sent; the first time a client
+# sees one in its merged settings it emits ``LLMSettingIgnoredWarning`` (DEC-003-6).
+_OPENAI_NO_COUNTERPART_PARAMS: frozenset[str] = frozenset(
+    {"presence_penalty", "frequency_penalty", "seed", "stop", "logit_bias"}
+)
 
 
 async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str, **kwargs: Any) -> Any:
@@ -275,14 +196,117 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
     return ordered
 
 
-class OpenAIAPIClient(LLMClient):
-    """Convenience layer over OpenAI's Chat Completions API.
+def _responses_text_format(response_format: Any) -> Any:
+    """Translate an app-facing ``response_format`` value into the Responses text format (DEC-003-10).
 
-    This client is designed for the official OpenAI API.
-    It supports:
-    - The credential the app passes as ``bearer_token`` (required; never read from the environment)
-    - Standard OpenAI Chat Completions endpoint
-    - OpenAI-specific parameter handling: only settings the app set are sent
+    The result is what the request carries under ``text: {"format": <result>}``.
+
+    - ``{"type": "json_object"}`` -> ``{"type": "json_object"}``.
+    - ``{"type": "json_schema", "json_schema": {...}}`` -> ``{"type": "json_schema", ...}``: every key
+      of the nested mapping (``name``, ``schema``, ``strict``, ``description``, whatever is present)
+      is lifted beside ``type``.
+    - ``{"type": "text"}`` -> ``{"type": "text"}``.
+    - Any other value (including a format already in the flat Responses shape) is returned unchanged.
+
+    The input is never modified.
+
+    Args:
+        response_format: The merged ``response_format`` setting, as the app set it.
+
+    Returns:
+        The Responses text-format value.
+    """
+    if not isinstance(response_format, Mapping):
+        return response_format
+    if response_format.get("type") == "json_schema":
+        nested = response_format.get("json_schema")
+        # Only the chat-completions nested form is flattened; a json_schema format without a nested
+        # mapping is taken to be already in the flat Responses shape and passes through (DEC-003-10).
+        if isinstance(nested, Mapping):
+            # ``type`` stays "json_schema" even if the nested mapping happens to carry its own.
+            return {"type": "json_schema", **{k: v for k, v in nested.items() if k != "type"}}
+    # json_object, text and every other shape are already valid Responses formats: unchanged.
+    return response_format
+
+
+def _responses_reply_text(response: Any) -> str:
+    """Return the answer text of a non-streamed Responses reply (DEC-003-12).
+
+    Visits every item of type ``message`` in the reply's ``output`` list in order and concatenates,
+    with no separator, the ``text`` of each content part of type ``output_text``. Reasoning items and
+    other part types (e.g. refusal) are ignored. A missing or non-list ``output``, no message item, or
+    a null/missing ``text`` gives ``""``.
+
+    Args:
+        response: The decoded reply body (expected to be a mapping).
+
+    Returns:
+        The concatenated output text; ``""`` when there is none.
+
+    Raises:
+        LLMError: ``status`` is ``"failed"`` -- description is ``error.message`` when ``error`` is a
+            mapping with a string ``message``, else the ``error`` value as JSON text; or ``status`` is
+            ``"incomplete"`` -- description is ``incomplete_details.reason`` when present, else the
+            ``incomplete_details`` value as JSON text. Any other or missing status extracts the text.
+            A reply that is not a mapping surfaces as a generic error.
+    """
+    if not isinstance(response, Mapping):
+        raise LLMError(
+            "Invalid response from OpenAI API when chatting: the reply is not a JSON object",
+            description=_reply_text(response),
+        )
+    status = response.get("status")
+    if status == "failed":
+        error = response.get("error")
+        message = error.get("message") if isinstance(error, Mapping) else None
+        reason = message if isinstance(message, str) else json.dumps(error, default=str)
+        raise LLMError("OpenAI Responses request failed", description=reason)
+    if status == "incomplete":
+        details = response.get("incomplete_details")
+        detail_reason = details.get("reason") if isinstance(details, Mapping) else None
+        reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
+        # DEC-003-12: a cut-off answer is never returned as if complete.
+        raise LLMError("OpenAI Responses reply is incomplete", description=reason)
+
+    output = response.get("output")
+    if not isinstance(output, list):
+        return ""
+    pieces: list[str] = []
+    for item in output:
+        # Reasoning and any other item types are skipped, so no reasoning text appears off-stream
+        # (US-028.AC-1).
+        if not isinstance(item, Mapping) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, Mapping) or part.get("type") != "output_text":
+                continue
+            text = part.get("text")
+            # Null or missing text contributes nothing (the Responses form of DEC-001-12).
+            if isinstance(text, str):
+                pieces.append(text)
+    return "".join(pieces)
+
+
+class OpenAIAPIClient(LLMClient):
+    """Client for OpenAI and OpenAI-compatible servers speaking the Responses protocol.
+
+    ``chat``, ``generate`` and ``chat_json`` send ``POST /responses`` (DEC-arch-1, DEC-003-11):
+    the body carries ``model``, ``input`` (role/content items), ``stream``, ``store: false``,
+    ``include: ["reasoning.encrypted_content"]`` and the app's settings translated to Responses
+    fields (DEC-003-9, DEC-003-10). Settings without a Responses counterpart are not sent and are
+    reported once per setting per client instance with ``LLMSettingIgnoredWarning`` (DEC-003-6).
+    Tool conversations are refused until feature 004 (DEC-003-4); the chat-completions protocol is
+    available as ``OpenAIChatCompletionsClient``. ``list_models``, ``get_models`` and ``embed_batch``
+    behave exactly as on the chat-completions client (US-057.AC-2).
+
+    Invariants:
+    - The credential comes only from ``bearer_token`` (required; never read from the environment,
+      DEC-001-6) and never appears in error or trace text.
+    - ``_warned_settings`` holds the no-counterpart settings this instance already warned about;
+      it starts empty and only grows.
     """
 
     def __init__(self, model: str, base_url: str = "https://api.openai.com/v1",
@@ -307,17 +331,43 @@ class OpenAIAPIClient(LLMClient):
         if not bearer_token:
             raise ValueError("OpenAI credential not provided. Pass the API key as the bearer_token argument.")
         super().__init__(model, base_url, timeout, bearer_token, default_options)
+        # Per-instance record of no-counterpart settings already warned about (DEC-003-6).
+        self._warned_settings: set[str] = set()
 
     def _merge_options(
         self,
         *,
         options: Optional[OpenAIOptions],
     ) -> Dict[str, Any]:
-        """Merge settings via the base three-layer merge and map the thinking switch (DEC-000-19).
+        """Merge settings and turn them into Responses wire fields (DEC-003-9, DEC-003-10, DEC-003-1).
 
-        Returns only keys the app set (the table carries no built-in values, DEC-001-13).
-        ``enable_thinking`` is removed; when truthy and no ``reasoning_effort`` is set,
-        ``reasoning_effort`` becomes ``"medium"``. Nothing is added when the switch is unset.
+        The merge is ``_merge_options_base`` unchanged (table -> ``default_options`` -> ``options``;
+        aliases mapped, unknown keys dropped silently without a warning, ``None`` values stripped).
+        The merged settings then become wire fields:
+
+        - ``temperature``, ``top_p``, ``user``: same name.
+        - ``max_tokens`` (also set as ``context_length``): ``max_output_tokens``.
+        - ``response_format``: ``text: {"format": _responses_text_format(value)}``.
+        - ``presence_penalty``, ``frequency_penalty``, ``seed``, ``stop``, ``logit_bias``: not sent.
+          For each one present that is not yet in ``self._warned_settings``, ``warnings.warn`` is
+          called with ``LLMSettingIgnoredWarning`` and a message naming the setting and saying the
+          Responses protocol has no counterpart so it was not sent; the key is then recorded.
+          A client default and a per-call value are treated alike.
+        - ``enable_thinking`` / ``reasoning_effort``: never top-level; a ``reasoning`` object.
+          Thinking on (truthy): ``{"effort": <explicit effort or "medium">, "summary": "auto"}``.
+          Thinking off (set, falsy): ``{"effort": <explicit effort or "none">}``.
+          Thinking unset: ``{"effort": <explicit>}`` when an effort is set, else no ``reasoning``.
+
+        Values are passed through unvalidated.
+
+        Args:
+            options: Per-call settings, or ``None``.
+
+        Returns:
+            The wire fields to place in the request body beside the fixed keys and ``input``.
+
+        Side effects:
+            May emit ``LLMSettingIgnoredWarning`` and add keys to ``self._warned_settings``.
         """
         opts = self._merge_options_base(
             options=options,
@@ -325,12 +375,203 @@ class OpenAIAPIClient(LLMClient):
             alias_map=_OPENAI_ALIAS_MAP,
             default_opts=self.default_options,
         )
-        # OpenAI uses reasoning_effort, not enable_thinking.
-        # Translate enable_thinking into reasoning_effort for a unified interface.
-        enable_thinking = opts.pop("enable_thinking", None)
-        if enable_thinking and "reasoning_effort" not in opts:
-            opts["reasoning_effort"] = "medium"
-        return opts
+        # DEC-003-6: warn at call time, after the merge, so client defaults and per-call values are
+        # treated alike; the per-instance record gives "once per setting per client" whatever the
+        # app's warning filters do (Python's own filters still apply on top).
+        for key in opts:
+            if key in _OPENAI_NO_COUNTERPART_PARAMS and key not in self._warned_settings:
+                warnings.warn(
+                    f"Setting '{key}' has no counterpart in the OpenAI Responses protocol and was not sent",
+                    LLMSettingIgnoredWarning,
+                    # Points at the caller of chat / chat_json (one level deeper for generate).
+                    stacklevel=3,
+                )
+                self._warned_settings.add(key)
+
+        wire: dict[str, Any] = {}
+        for key in ("temperature", "top_p", "user"):
+            if key in opts:
+                wire[key] = opts[key]
+        if "max_tokens" in opts:
+            wire["max_output_tokens"] = opts["max_tokens"]
+        if "response_format" in opts:
+            wire["text"] = {"format": _responses_text_format(opts["response_format"])}
+
+        # Thinking set means present after the merge (None was stripped), so False / 0 count as off.
+        effort = opts.get("reasoning_effort")
+        if "enable_thinking" in opts:
+            if opts["enable_thinking"]:
+                # DEC-arch-7: only the thinking switch asks for a summary, never an effort alone.
+                wire["reasoning"] = {"effort": effort if effort is not None else "medium", "summary": "auto"}
+            else:
+                # DEC-003-1: "none" is the off value; an explicit effort set by the app wins.
+                wire["reasoning"] = {"effort": effort if effort is not None else "none"}
+        elif effort is not None:
+            wire["reasoning"] = {"effort": effort}
+        return wire
+
+    def _build_responses_payload(
+        self,
+        messages: list[LLMMessage],
+        *,
+        system: str | None,
+        settings: dict[str, Any],
+        stream: bool,
+    ) -> dict[str, Any]:
+        """Build a Responses request body (DEC-003-11); used by the non-streamed and streamed paths.
+
+        The body holds exactly: ``model`` (``self.model``); ``input``; ``stream``; ``store: False``;
+        ``include: ["reasoning.encrypted_content"]`` (DEC-arch-7); plus every key of ``settings``.
+        No ``instructions`` field. ``input`` is a new list: a truthy ``system`` becomes
+        ``{"role": "system", "content": system}`` at its head (an empty one adds nothing), then each
+        caller message becomes ``{"role": ..., "content": ...}`` -- only those two keys, values as
+        given, in order.
+
+        Args:
+            messages: The caller's messages; neither the list nor its items are modified.
+            system: Optional system instruction.
+            settings: Wire fields from ``_merge_options``.
+            stream: The value sent as ``stream``.
+
+        Returns:
+            The request body.
+        """
+        items: list[dict[str, Any]] = []
+        if system:
+            items.append({"role": "system", "content": system})
+        # Only role and content are copied: Responses rejects unknown item fields (DEC-003-11).
+        items.extend({"role": m["role"], "content": m["content"]} for m in messages)
+        return {
+            "model": self.model,
+            "input": items,
+            "stream": stream,
+            "store": False,
+            "include": ["reasoning.encrypted_content"],
+            **settings,
+        }
+
+    async def _read_responses_stream(
+        self,
+        response: aiohttp.ClientResponse,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
+        """Parse an open Responses event stream into the full delivered text (DEC-003-13, DEC-arch-11).
+
+        This class's own parser (DEC-arch-2): nothing is shared with the llama-swap class or the base;
+        the chat-completions parsers are not used. Payload strings are read only through
+        ``self._iter_sse_data(response)`` and each is decoded as JSON. Non-JSON payloads (including a
+        ``[DONE]`` sentinel), non-object values and objects without a string ``type`` are skipped
+        without error and without a receiver call. Dispatch on ``type``:
+
+        - ``response.output_text.delta`` -> text piece (the event's ``delta``).
+        - ``response.reasoning_text.delta`` and ``response.reasoning_summary_text.delta`` -> reasoning
+          piece (``delta``); no separator is inserted between reasoning or summary parts.
+        - ``response.completed`` -> the stream is complete; returns at once and reads nothing further.
+        - ``response.failed`` -> ``LLMError``, description ``response.error.message`` when a string,
+          else ``response.error`` as JSON text.
+        - ``response.incomplete`` -> ``LLMError``, description ``response.incomplete_details.reason``
+          when present, else that value as JSON text.
+        - ``error`` -> ``LLMError``, description the event's ``message`` when a string, else the
+          event as JSON text.
+        - Every other type (created, in_progress, output_item.*, content_part.*, ``*.done``, tool
+          events, ...) is ignored.
+
+        Empty or missing deltas deliver nothing. Reasoning markers follow DEC-000-20 per run of
+        reasoning: the first reasoning piece at the start or after text is prefixed with
+        ``<think>``; the first text piece after reasoning is prefixed with ``</think>``; a block still
+        open when ``response.completed`` arrives is closed by delivering ``</think>`` as its own piece.
+        A stream without reasoning events carries no markers. Each piece is delivered to
+        ``on_delta`` as soon as it is parsed (its result awaited when awaitable, DEC-000-23) and
+        appended to the returned text, so the return equals the concatenation of what the receiver
+        got. No piece is delivered after a failure event.
+
+        Args:
+            response: The open streamed response yielded by ``self._stream_post``; only passed to
+                ``self._iter_sse_data`` (tests pass ``None`` with that reader replaced, DEC-003-16).
+            on_delta: Optional receiver for each piece; when ``None`` pieces are only accumulated.
+
+        Returns:
+            The full delivered text, reasoning included with its markers.
+
+        Raises:
+            LLMError: On a ``response.failed``, ``response.incomplete`` or ``error`` event (carrying
+                the server's reason); when the stream ends without ``response.completed`` (also after
+                a ``[DONE]`` sentinel; the Responses form of DEC-001-1); on reader failures
+                (DEC-001-7, raised by ``_iter_sse_data``).
+            Exception: Whatever ``on_delta`` raises propagates unchanged and ends the parse; no later
+                piece is delivered (DEC-000-23).
+        """
+        delivered: list[str] = []
+        in_reasoning = False
+
+        async def _deliver(piece: str) -> None:
+            # Append before calling the receiver so the return always equals what was handed out;
+            # a receiver failure propagates unchanged and ends the parse (DEC-000-23).
+            delivered.append(piece)
+            if on_delta is not None:
+                result = on_delta(piece)
+                if inspect.isawaitable(result):
+                    await result
+
+        async for data in self._iter_sse_data(response):
+            try:
+                event = json.loads(data)
+            except (ValueError, TypeError):
+                # Non-JSON payloads, including a ``[DONE]`` sentinel, are skipped (DEC-003-13).
+                continue
+            if not isinstance(event, Mapping):
+                continue
+            event_type = event.get("type")
+            if not isinstance(event_type, str):
+                continue
+
+            if event_type == "response.output_text.delta":
+                delta = event.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                if in_reasoning:
+                    # First text after a reasoning run closes the block on the same piece (DEC-000-20).
+                    in_reasoning = False
+                    delta = "</think>" + delta
+                await _deliver(delta)
+            elif event_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
+                delta = event.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                if not in_reasoning:
+                    # Each reasoning run opens its own block, so reasoning/text/reasoning gives two
+                    # blocks (DEC-003-13); no separator between summary parts.
+                    in_reasoning = True
+                    delta = "<think>" + delta
+                await _deliver(delta)
+            elif event_type == "response.completed":
+                if in_reasoning:
+                    await _deliver("</think>")
+                # Completion is final: anything the server sends after it is never read.
+                return "".join(delivered)
+            elif event_type == "response.failed":
+                inner = event.get("response")
+                error = inner.get("error") if isinstance(inner, Mapping) else None
+                message = error.get("message") if isinstance(error, Mapping) else None
+                reason = message if isinstance(message, str) else json.dumps(error, default=str)
+                raise LLMError("OpenAI Responses request failed", description=reason)
+            elif event_type == "response.incomplete":
+                inner = event.get("response")
+                details = inner.get("incomplete_details") if isinstance(inner, Mapping) else None
+                detail_reason = details.get("reason") if isinstance(details, Mapping) else None
+                reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
+                # Same wording as the non-streamed check (DEC-003-12): a cut-off answer is an error.
+                raise LLMError("OpenAI Responses reply is incomplete", description=reason)
+            elif event_type == "error":
+                message = event.get("message")
+                reason = message if isinstance(message, str) else json.dumps(event, default=str)
+                raise LLMError("The server reported an error in the stream", description=reason)
+            # Every other event type (created, in_progress, output_item.*, content_part.*, *.done,
+            # tool events) carries nothing to deliver and is ignored (DEC-003-13).
+
+        # ``response.completed`` is the only completion signal; ``[DONE]`` does not count (DEC-003-13,
+        # the Responses form of DEC-001-1).
+        raise LLMError("The stream ended before the reply was complete")
 
     async def list_models(self) -> List[str]:
         """Return the ids of the models the server offers, in the server's order.
@@ -386,40 +627,48 @@ class OpenAIAPIClient(LLMClient):
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        """Send one chat-completions request and return the reply text.
+        """Send one Responses chat request and return the answer text.
 
-        Merged settings are spread top-level into the request body. Non-streamed: returns the
-        reply content, or empty text when the server's content is null (DEC-001-12). Streamed:
-        the request is opened through the base ``_stream_post`` helper (DEC-001-8); each text
-        piece goes to ``on_delta`` in order (through the trace wrapper only when tracing is
-        enabled, DEC-000-48) and their concatenation is returned.
+        Settings are merged by ``_merge_options`` (may warn, DEC-003-6) and the body is built by
+        ``_build_responses_payload`` with ``stream`` as given. Inside the ``"chat"`` trace session
+        the system instruction, messages and ``("POST", "/responses", payload)`` are logged.
+        Non-streamed: sends ``self._request("POST", "/responses", json=payload)`` (DEC-003-16),
+        extracts the text with ``_responses_reply_text``, logs and returns it. Streamed
+        (``stream=True``): the same body with ``stream`` true is opened once through
+        ``self._stream_post("/responses", payload)`` (DEC-001-8, DEC-003-16) and parsed by
+        ``_read_responses_stream`` inside the trace session (DEC-003-13); pieces go to ``on_delta`` in
+        order, through a chunk-logging trace wrapper only when tracing is enabled (DEC-000-48); the
+        returned text (equal to everything the receiver got) is logged and returned.
+
+        Args:
+            messages: Conversation messages; the caller's list is never modified.
+            system: Optional system instruction, sent as a leading system item when truthy.
+            options: Per-call settings.
+            stream: Stream the answer.
+            on_delta: Receiver for streamed pieces.
+
+        Returns:
+            The answer text (``""`` when the reply holds none).
 
         Raises:
-            LLMError: Non-2xx reply (address, status and server reply; never the credential) or
-                transport failure. A receiver failure propagates unchanged (DEC-000-23).
+            LLMError: Non-2xx reply (address and server reply; never the credential), transport
+                failure, or a failed / incomplete reply (DEC-003-12); streamed: a failure event or a
+                stream ending before ``response.completed`` (DEC-003-13). A receiver failure
+                propagates unchanged (DEC-000-23).
         """
-        opt = self._merge_options(options=options)
-
-        msgs = list(messages)
-        if system:
-            msgs.insert(0, {"role": "system", "content": system})
-
-        payload = {
-            "model": self.model,
-            "messages": msgs,
-            "stream": stream,
-            **opt, # OpenAI options are top-level in payload
-        }
+        settings = self._merge_options(options=options)
+        payload = self._build_responses_payload(messages, system=system, settings=settings, stream=stream)
 
         with self._tracer.trace("chat", self.model) as t:
             t.log_system(system)
-            t.log_messages(msgs)
-            t.log_request("POST", "/chat/completions", payload)
+            # The input items are the copied messages with the system item first (operation shape).
+            t.log_messages(payload["input"])
+            t.log_request("POST", "/responses", payload)
 
             if not stream:
-                content = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
-                # DEC-001-12: coerce null before tracing and returning, so neither sees None.
-                result = content if content is not None else ""
+                reply = await self._request("POST", "/responses", json=payload)
+                # DEC-003-12: a failed / incomplete reply raises here, inside the session, so it is recorded.
+                result = _responses_reply_text(reply)
                 t.log_response(result)
                 return result
 
@@ -428,14 +677,14 @@ class OpenAIAPIClient(LLMClient):
             async def _tracing_delta(text: str) -> None:
                 t.log_chunk(text)
                 if _orig_delta:
-                    result = _orig_delta(text)
-                    if inspect.isawaitable(result):
-                        await result
+                    piece_result = _orig_delta(text)
+                    if inspect.isawaitable(piece_result):
+                        await piece_result
 
-            # DEC-001-8: the helper maps non-2xx and transport failures to LLMError. The trace wrapper
-            # is installed only when tracing is enabled (DEC-000-48).
-            async with self._stream_post("/chat/completions", payload) as response:
-                result = await self._stream_openai_chat_response(
+            # Streamed path: DEC-001-8 maps non-2xx and transport failures to LLMError; the trace
+            # wrapper is installed only when tracing is enabled (DEC-000-48).
+            async with self._stream_post("/responses", payload) as response:
+                result = await self._read_responses_stream(
                     response, _tracing_delta if self._tracer.enabled else on_delta
                 )
                 t.log_response(result)
@@ -450,9 +699,18 @@ class OpenAIAPIClient(LLMClient):
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        # OpenAI's primary text generation is via chat completions.
-        # We can simulate 'generate' by wrapping the prompt in a user message.
-        messages : List[LLMMessage] = [{"role": "user", "content": prompt}]
+        """Answer one prompt: a one-message chat through ``chat`` (DEC-000-8).
+
+        Sends the system item (when truthy) and one ``{"role": "user", "content": prompt}`` item
+        (DEC-003-11); every argument is forwarded to ``chat`` unchanged.
+
+        Returns:
+            The answer text, as ``chat`` returns it.
+
+        Raises:
+            LLMError: As ``chat``.
+        """
+        messages: list[LLMMessage] = [{"role": "user", "content": prompt}]
         return await self.chat(
             messages,
             system=system,
@@ -470,11 +728,14 @@ class OpenAIAPIClient(LLMClient):
         options: Optional[OpenAIOptions] = None,
     ) -> str:
         """
-        Chat with structured JSON output using OpenAI's JSON mode.
+        Chat with structured JSON output over Responses (DEC-003-10).
 
-        Sends the app's ``response_format`` setting when one is set, otherwise
-        ``{"type": "json_object"}`` (DEC-001-2). Returns the reply content, or empty text when
-        the server's content is null (DEC-001-12).
+        Sends one non-streamed ``POST /responses`` (``stream: False``) built by
+        ``_build_responses_payload``, inside the ``"chat_json"`` trace session, through
+        ``self._request("POST", "/responses", json=payload)`` (DEC-003-16). The text format is
+        ``text: {"format": ...}`` holding the translated ``response_format`` setting when the app set
+        one, otherwise ``{"type": "json_object"}`` (the Responses form of DEC-001-2). Returns the
+        text from ``_responses_reply_text`` (``""`` when the reply holds none).
         When ``response_schema`` is given, the only check is that the reply text parses as JSON
         (DEC-002-7, DEC-000-37): any valid JSON value (object, list, string, number, boolean or
         null) is returned unchanged; the schema's fields are not checked. Without
@@ -482,34 +743,24 @@ class OpenAIAPIClient(LLMClient):
         (US-040, out of scope).
 
         Raises:
-            LLMError: Request failure, or ``response_schema`` given and the reply is not valid JSON
-                ("LLM response was not valid JSON, despite requesting JSON mode.", parse error in
-                the description).
+            LLMError: Request failure; a failed / incomplete reply (DEC-003-12); or
+                ``response_schema`` given and the reply is not valid JSON ("LLM response was not
+                valid JSON, despite requesting JSON mode.", parse error in the description).
         """
-        opt = self._merge_options(options=options)
-
-        msgs = list(messages)
-        if system:
-            msgs.insert(0, {"role": "system", "content": system})
-
-        # DEC-001-2: the JSON-object format is the fallback only; ``opt`` is spread after it, so an
-        # app-set ``response_format`` setting replaces it. Keep this order.
-        payload = {
-            "model": self.model,
-            "messages": msgs,
-            "stream": False,
-            "response_format": {"type": "json_object"},
-            **opt,
-        }
+        settings = self._merge_options(options=options)
+        # DEC-003-10 / DEC-001-2: the JSON-object format is the fallback only; an app-set
+        # ``response_format`` setting has already become ``text`` in ``settings`` and is kept.
+        if "text" not in settings:
+            settings["text"] = {"format": {"type": "json_object"}}
+        payload = self._build_responses_payload(messages, system=system, settings=settings, stream=False)
 
         with self._tracer.trace("chat_json", self.model) as t:
             t.log_system(system)
-            t.log_messages(msgs)
-            t.log_request("POST", "/chat/completions", payload)
+            t.log_messages(payload["input"])
+            t.log_request("POST", "/responses", payload)
 
-            content = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]["content"]
-            # DEC-001-12: null content becomes empty text before tracing and the parse check.
-            response_content = content if content is not None else ""
+            reply = await self._request("POST", "/responses", json=payload)
+            response_content = _responses_reply_text(reply)
             t.log_response(response_content)
 
         # DEC-002-7: the only check is the JSON parse; any valid JSON value passes unchanged.
@@ -525,29 +776,6 @@ class OpenAIAPIClient(LLMClient):
 
         return response_content
 
-    async def _tools_stream_request(
-        self,
-        payload: Dict[str, Any],
-        on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
-    ) -> tuple[str, list[dict]]:
-        """Run one streamed tool round (test seam; inputs and outputs unchanged).
-
-        Opens the request to ``/chat/completions`` through the base ``_stream_post`` helper
-        (DEC-001-8) and parses it with ``_stream_openai_tools_response``.
-
-        Args:
-            payload: Full request body for the round.
-            on_delta: Optional receiver for streamed text pieces.
-
-        Returns:
-            The round's text content and its assembled tool calls.
-
-        Raises:
-            LLMError: Non-2xx reply or transport failure.
-        """
-        async with self._stream_post("/chat/completions", payload) as response:
-            return await self._stream_openai_tools_response(response, on_delta)
-
     async def chat_with_tools(
         self,
         messages: List[Dict[str, str]],
@@ -561,122 +789,22 @@ class OpenAIAPIClient(LLMClient):
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Run the tool loop and return the model's final answer.
+        """Refuse tool conversations: not available on Responses until feature 004 (DEC-003-4).
 
-        Each round's body carries the merged settings; a truthy ``response_format`` parameter is
-        sent and replaces the ``response_format`` setting, otherwise the setting (if set) is sent
-        (DEC-001-15). Null content of the final answer, and of a recorded assistant tool-call
-        turn, becomes empty text (DEC-001-12). Streamed rounds go through ``_tools_stream_request``.
-
-        Each requested tool call is handled in order: offered-tool check, argument reading,
-        ``log_tool_call``, argument-name check, run, result conversion, ``log_tool_result``.
-
-        - Offered-tool check: a missing, empty or not-advertised name (not in
-          ``tools_definitions``) raises ``LLMError`` naming the requested name, even when ``tools``
-          has a callable under that name; the tool is not run (DEC-002-3). A call without a
-          ``function`` key or name counts as an empty name.
-        - Argument reading: missing or empty arguments mean no arguments; a mapping is used as
-          given; text is decoded as JSON and must give a JSON object. Undecodable text, a
-          non-object JSON value, or any other type raises ``LLMError`` naming the tool, with the
-          reason in its description; the tool is not run (DEC-002-4).
-        - Result conversion: a mapping or list becomes JSON text with non-ASCII kept unescaped; a
-          failed serialisation raises ``LLMError`` naming the tool (DEC-002-5). Anything else
-          becomes ``str(result)``. This conversion is outside the wrap that turns a tool's own
-          exception into ``RuntimeError``.
-        - Round limit: when ``max_loops`` rounds pass without a final answer, ``RuntimeError`` is
-          raised whose message states the round limit was reached, contains ``max_loops`` and
-          the configured value (DEC-002-2). No partial answer is returned.
+        Raises ``NotImplementedError`` before settings are merged or any request is sent (so no
+        warning is emitted), with a message saying tool conversations on Responses are not available
+        yet and naming ``OpenAIChatCompletionsClient`` as the interim choice. Never falls back to
+        ``/chat/completions``. Signature unchanged.
 
         Raises:
-            ValueError: An advertised tool has no callable (before any request), or a call's
-                argument names do not fit the callable (the tool is not run).
-            RuntimeError: A tool raises (message names the tool), or the round limit is reached.
-            LLMError: Request failure; a requested tool not offered or with an empty name; unreadable
-                arguments; an unserialisable mapping or list result.
+            NotImplementedError: Always.
         """
-        advertised = {d["function"]["name"] for d in tools_definitions}
-        missing = advertised - tools.keys()
-        if missing:
-            raise ValueError(f"Missing callables for tools {sorted(missing)}")
-
-        opt = self._merge_options(options=options)
-
-        msgs = list(messages)
-        if system:
-            msgs.insert(0, {"role": "system", "content": system})
-
-        with self._tracer.trace("chat_with_tools", self.model) as t:
-            t.log_system(system)
-            t.log_messages(msgs)
-
-            for loop_idx in range(max_loops):
-                payload = {
-                    "model": self.model,
-                    "messages": msgs,
-                    "tools": tools_definitions,
-                    "stream": stream,
-                    **opt,
-                }
-                # DEC-001-15: applied after the settings spread, so a truthy parameter replaces the
-                # ``response_format`` setting on every round; without it the setting (if any) stays.
-                if response_format:
-                    payload["response_format"] = response_format
-
-                t.log_request("POST", f"/chat/completions (loop {loop_idx})", payload)
-
-                if stream:
-                    content, tool_calls = await self._tools_stream_request(payload, on_delta)
-                    assistant_msg: Dict[str, Any] = {"content": content, "tool_calls": tool_calls}
-                else:
-                    assistant_msg = (await self._request("POST", "/chat/completions", json=payload))["choices"][0]["message"]
-                    tool_calls = assistant_msg.get("tool_calls") or []
-
-                # DEC-001-12: a missing or null content is empty text, both for the final answer and
-                # for the assistant tool-call turn recorded in the conversation.
-                content_text = assistant_msg.get("content") or ""
-
-                if not tool_calls:
-                    final = content_text
-                    msgs.append({"role": "assistant", "content": final})
-                    t.log_response(final)
-                    return final
-
-                msgs.append(
-                    {
-                        "role": "assistant",
-                        "content": content_text,
-                        "tool_calls": tool_calls,
-                    }
-                )
-
-                for call in tool_calls:
-                    # Step 001 order: offered check, then argument reading, both before the tool can
-                    # run; calls earlier in this reply have already run and keep their effects.
-                    name = _offered_tool_name(call, advertised)
-                    func = tools[name]
-                    kwargs = _read_tool_arguments(name, call["function"].get("arguments"))
-                    t.log_tool_call(name, kwargs)
-                    if not all(k in inspect.signature(func).parameters for k in kwargs):
-                        raise ValueError(f"Bad args for tool '{name}': {kwargs}")
-                    try:
-                        result = func(**kwargs)
-                        if inspect.isawaitable(result):
-                            result = await result
-                    except Exception as exc:
-                        raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
-
-                    # Outside the try above, so a conversion failure stays LLMError and is not
-                    # reported as the tool's own failure (DEC-002-5).
-                    content = _tool_result_text(name, result)
-                    t.log_tool_result(name, content)
-                    tool_message: Dict[str, Any] = {"role": "tool", "content": content}
-                    tool_call_id = call.get("id")
-                    if tool_call_id:
-                        tool_message["tool_call_id"] = tool_call_id
-                    msgs.append(tool_message)
-
-        # DEC-002-2: stays RuntimeError and outside the trace session; the text keeps `max_loops`.
-        raise RuntimeError(f"Tool loop reached its round limit (max_loops={max_loops}) without a final answer")
+        # DEC-003-4: refuse first, before _merge_options (no warning) and before any request; never
+        # fall back to /chat/completions (US-056.AC-4).
+        raise NotImplementedError(
+            "Tool conversations are not available on the OpenAI Responses protocol yet; "
+            "use OpenAIChatCompletionsClient for chat_with_tools in the meantime."
+        )
 
     async def embed_batch(
         self,

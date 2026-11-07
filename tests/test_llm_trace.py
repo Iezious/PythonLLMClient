@@ -20,8 +20,8 @@ import pytest
 
 import llm.trace
 from llm.exceptions import LLMError
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 from llm.trace import LLMTracer
 
 BASE_URL = "https://api.example.test/v1"
@@ -159,12 +159,12 @@ def _freeze_clock(monkeypatch) -> None:
     monkeypatch.setattr(llm.trace, "datetime", _FrozenClock)
 
 
-def _openai() -> OpenAIAPIClient:
-    return OpenAIAPIClient(model=MODEL, base_url=BASE_URL, bearer_token="sk-test")
+def _openai() -> OpenAIChatCompletionsClient:
+    return OpenAIChatCompletionsClient(model=MODEL, base_url=BASE_URL, bearer_token="sk-test")
 
 
-def _llamaswap() -> LlamaSwapAPIClient:
-    return LlamaSwapAPIClient(model=MODEL, base_url=BASE_URL, bearer_token="sk-test")
+def _llamaswap() -> LlamaSwapChatCompletionsClient:
+    return LlamaSwapChatCompletionsClient(model=MODEL, base_url=BASE_URL, bearer_token="sk-test")
 
 
 def _reply(content: str | None, tool_calls: list[dict] | None = None) -> dict:

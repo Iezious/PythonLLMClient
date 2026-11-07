@@ -12,15 +12,17 @@ from typing import Any
 
 import pytest
 
-from llm.llama_swap import LlamaSwapAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
 from llm.llm_client import LLMClient
-from llm.openai import OpenAIAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 # The parser lives on the shared base class; both OpenAI-family clients reach it, so every test runs
 # against both to show the grouping is backend-independent.
 _CLIENT_FACTORIES: list[Callable[[], LLMClient]] = [
-    lambda: OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test"),
-    lambda: LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1", bearer_token="sk-test"),
+    lambda: OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test"),
+    lambda: LlamaSwapChatCompletionsClient(
+        model="some-model", base_url="http://localhost:8080/v1", bearer_token="sk-test"
+    ),
 ]
 _CLIENT_IDS = ["openai", "llamaswap"]
 

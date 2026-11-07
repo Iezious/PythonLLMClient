@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 
 from llm.exceptions import LLMError
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 STREAM_MODES = [pytest.param(False, id="non_streamed"), pytest.param(True, id="streamed")]
 
@@ -33,14 +33,16 @@ def _no_tracing(monkeypatch):
     monkeypatch.delenv("LLM_TRACE_FOLDER", raising=False)
 
 
-def _openai() -> OpenAIAPIClient:
+def _openai() -> OpenAIChatCompletionsClient:
     """Build an OpenAI client with an explicit test credential."""
-    return OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+    return OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
 
 
-def _llamaswap() -> LlamaSwapAPIClient:
+def _llamaswap() -> LlamaSwapChatCompletionsClient:
     """Build a llama-swap client with an explicit test credential."""
-    return LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1", bearer_token="sk-test")
+    return LlamaSwapChatCompletionsClient(
+        model="some-model", base_url="http://localhost:8080/v1", bearer_token="sk-test"
+    )
 
 
 def _tool_def(name: str) -> dict[str, Any]:

@@ -5,6 +5,10 @@ helper with non-2xx and transport failures as ``LLMError`` (DEC-001-7/8), null r
 text (DEC-001-12), only app-set settings sent plus the offered keys (DEC-001-13/14), response-format
 precedence (DEC-001-2/15), the unchanged merge and thinking rules, and the embedding end-user id rule
 (DEC-001-16). Every expected value comes from the step's Definition of done and the cited decisions.
+
+Feature 003.responses-chat, step 001: these tests now build ``OpenAIChatCompletionsClient`` (the
+chat-completions regression suite, DoD-11), and the last section checks that its ``chat`` posts to
+``/chat/completions`` (DoD-9 of that step, tagged ``__s001_DoD9``).
 """
 
 import json
@@ -18,7 +22,7 @@ from yarl import URL
 
 from llm.exceptions import LLMError
 from llm.llm import get_llm_client
-from llm.openai import OpenAIAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 BASE_URL = "https://api.example.test/v1"
 CHAT_URL = f"{BASE_URL}/chat/completions"
@@ -96,7 +100,7 @@ def _reply(content: str | None, tool_calls: list[dict] | None = None) -> dict:
     return {"choices": [{"index": 0, "message": message, "finish_reason": "stop"}]}
 
 
-def _capture_requests(monkeypatch, client: OpenAIAPIClient, replies: list[dict]) -> list[dict]:
+def _capture_requests(monkeypatch, client: OpenAIChatCompletionsClient, replies: list[dict]) -> list[dict]:
     """Replace the ``_request`` seam with a fake that records each request and returns canned replies.
 
     Each record holds ``method``, ``path`` and a copy of the JSON body; messages are copied because the
@@ -288,8 +292,8 @@ def _failing_session(exc: BaseException) -> _FakeSession:
     return _FakeSession(lambda method, url, kw: exc)
 
 
-def _client(**kwargs) -> OpenAIAPIClient:
-    return OpenAIAPIClient(model=MODEL, base_url=BASE_URL, bearer_token=CREDENTIAL, **kwargs)
+def _client(**kwargs) -> OpenAIChatCompletionsClient:
+    return OpenAIChatCompletionsClient(model=MODEL, base_url=BASE_URL, bearer_token=CREDENTIAL, **kwargs)
 
 
 @pytest.fixture
@@ -334,7 +338,7 @@ async def test_openai_streamed_request_carries_app_credential__DoD1(no_env_crede
 def test_openai_missing_credential_refused_with_guidance__DoD2(no_env_credential, missing):
     """DoD-2: no or empty credential raises ValueError naming ``bearer_token`` and no environment variable."""
     with pytest.raises(ValueError) as excinfo:
-        OpenAIAPIClient(model=MODEL, base_url=BASE_URL, bearer_token=missing)
+        OpenAIChatCompletionsClient(model=MODEL, base_url=BASE_URL, bearer_token=missing)
 
     message = str(excinfo.value)
     assert "bearer_token" in message
@@ -348,7 +352,7 @@ def test_openai_credential_in_environment_is_not_used__DoD3(monkeypatch):
     monkeypatch.setenv("OPEN_AI_KEY", "sk-env-open-ai-key-222")
 
     with pytest.raises(ValueError):
-        OpenAIAPIClient(model=MODEL, base_url=BASE_URL)
+        OpenAIChatCompletionsClient(model=MODEL, base_url=BASE_URL)
 
 
 def test_openai_credential_in_environment_empty_argument_refused__DoD3(monkeypatch):
@@ -357,7 +361,7 @@ def test_openai_credential_in_environment_empty_argument_refused__DoD3(monkeypat
     monkeypatch.setenv("OPEN_AI_KEY", "sk-env-open-ai-key-222")
 
     with pytest.raises(ValueError):
-        OpenAIAPIClient(model=MODEL, base_url=BASE_URL, bearer_token="")
+        OpenAIChatCompletionsClient(model=MODEL, base_url=BASE_URL, bearer_token="")
 
 
 def test_openai_refusal_message_contains_no_credential_value__DoD4(monkeypatch):
@@ -367,7 +371,7 @@ def test_openai_refusal_message_contains_no_credential_value__DoD4(monkeypatch):
     monkeypatch.setenv("OPEN_AI_KEY", env_values[1])
 
     with pytest.raises(ValueError) as excinfo:
-        OpenAIAPIClient(model=MODEL, base_url=BASE_URL)
+        OpenAIChatCompletionsClient(model=MODEL, base_url=BASE_URL)
 
     rendered = f"{excinfo.value} {excinfo.value.args!r}"
     for value in env_values:
@@ -377,8 +381,8 @@ def test_openai_refusal_message_contains_no_credential_value__DoD4(monkeypatch):
 @pytest.mark.asyncio
 async def test_openai_factory_forwards_credential__DoD5(no_env_credential):
     """DoD-5: ``get_llm_client("openai", ...)`` with a credential gives a client that sends it."""
-    client = get_llm_client("openai", BASE_URL, MODEL, bearer_token=CREDENTIAL)
-    assert isinstance(client, OpenAIAPIClient)
+    client = get_llm_client("openai", BASE_URL, MODEL, bearer_token=CREDENTIAL, protocol="chat_completions")
+    assert isinstance(client, OpenAIChatCompletionsClient)
     session = _json_reply_session()
     client.session = session
 
@@ -391,7 +395,7 @@ async def test_openai_factory_forwards_credential__DoD5(no_env_credential):
 def test_openai_factory_without_credential_raises__DoD5(no_env_credential):
     """DoD-5: ``get_llm_client("openai", ...)`` without a credential raises ValueError."""
     with pytest.raises(ValueError):
-        get_llm_client("openai", BASE_URL, MODEL)
+        get_llm_client("openai", BASE_URL, MODEL, protocol="chat_completions")
 
 
 # ---------------------------------------------------------------------------
@@ -826,3 +830,31 @@ async def test_openai_embed_batch_client_user_when_call_has_none__DoD19(monkeypa
 
     assert records[0]["json"]["user"] == "client-user"
     _assert_no_generation_in_embedding(records[0]["json"])
+
+
+# ---------------------------------------------------------------------------
+# Feature 003.responses-chat, step 001: chat goes to /chat/completions (DoD-9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_completions_chat_posts_to_chat_completions__s001_DoD9(monkeypatch):
+    """003 step 001 DoD-9 (US-056.AC-2): a non-streamed ``chat`` sends one ``POST /chat/completions``."""
+    client = _client()
+    records = _capture_requests(monkeypatch, client, [_reply("ok")])
+
+    await client.chat(USER_MESSAGES)
+
+    assert [(r["method"], r["path"]) for r in records] == [("POST", "/chat/completions")]
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_completions_streamed_chat_posts_to_chat_completions__s001_DoD9():
+    """003 step 001 DoD-9 (US-056.AC-2): a streamed ``chat`` also sends its request to ``/chat/completions``."""
+    client = _client()
+    session = _stream_session(_sse(_delta_frame("ok"), _FINISH_FRAME, "[DONE]"))
+    client.session = session
+
+    await client.chat(USER_MESSAGES, stream=True)
+
+    assert [(call["method"], call["url"]) for call in session.calls] == [("POST", CHAT_URL)]

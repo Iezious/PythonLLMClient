@@ -1,6 +1,6 @@
 """Client factory, prompt placeholder helpers and the retired CLI smoke test.
 
-Builds the right backend client from a server kind (``get_llm_client``) and fills prompt templates.
+Builds the right backend client from a server kind and wire protocol (``get_llm_client``) and fills prompt templates.
 """
 # ---------------------------------------------------------------------------
 # Client Factory
@@ -12,8 +12,11 @@ from llm.llm_client import LLMClient
 from llm.ollama import OllamaAPIClient
 from llm.openai import OpenAIAPIClient
 from llm.llama_swap import LlamaSwapAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
 
-__all__ = ["OllamaAPIClient", "OpenAIAPIClient", "LlamaSwapAPIClient", "get_llm_client", "substitute_placeholders", "recursive_format_placeholders"]
+__all__ = ["OllamaAPIClient", "OpenAIAPIClient", "LlamaSwapAPIClient", "OpenAIChatCompletionsClient",
+           "LlamaSwapChatCompletionsClient", "get_llm_client", "substitute_placeholders", "recursive_format_placeholders"]
 
 
 def get_llm_client(
@@ -23,8 +26,14 @@ def get_llm_client(
     timeout: float = 600.0,
     bearer_token: Optional[str] = None,
     default_options: Optional[Dict[str, Any]] = None,
+    protocol: str | None = None,
 ) -> LLMClient:
-    """Build the client for ``server_type``, forwarding every argument to its constructor.
+    """Build the client for ``server_type`` and ``protocol``, forwarding every other argument to its constructor.
+
+    Refusals are checked in this order (DEC-003-8, DEC-arch-4): an unknown ``server_type``; then a
+    ``protocol`` given (not ``None``) for ``"ollama"``; then, for ``"openai"`` / ``"llamaswap"``, a
+    ``protocol`` other than ``None``, ``"responses"`` or ``"chat_completions"``. Matching is exact (no
+    case folding or trimming). The address never influences the class chosen.
 
     Args:
         server_type: Exact backend kind: ``"ollama"``, ``"openai"`` or ``"llamaswap"``.
@@ -34,23 +43,42 @@ def get_llm_client(
         bearer_token: The app's credential, forwarded unchanged to every backend (``None`` builds
             a client without one).
         default_options: Client-level settings, merged under per-call settings.
+        protocol: Wire protocol for ``"openai"`` / ``"llamaswap"``: ``None`` (same as not passed) or
+            ``"responses"`` builds ``OpenAIAPIClient`` / ``LlamaSwapAPIClient``; ``"chat_completions"``
+            builds ``OpenAIChatCompletionsClient`` / ``LlamaSwapChatCompletionsClient``. Must be ``None``
+            for ``"ollama"``.
 
     Returns:
         The constructed client; no network call is made.
 
     Raises:
-        ValueError: ``server_type`` is not a supported kind; the message names it.
+        ValueError: ``server_type`` is not a supported kind (the message names it); a protocol is
+            given for ``"ollama"`` (the message says a protocol choice is not offered on Ollama); or
+            ``protocol`` is not an accepted value (the message names the value and the accepted values).
+            The OpenAI constructors also raise ``ValueError`` without a credential, whichever protocol.
     """
-    if server_type == "ollama":
-        return OllamaAPIClient(model, base_url, timeout, bearer_token, default_options)
-    elif server_type == "openai":
-        # The app owns the credential; the factory forwards it like every other branch and the
-        # library never reads it from the environment (DEC-001-5).
-        return OpenAIAPIClient(model, base_url, timeout, bearer_token, default_options)
-    elif server_type == "llamaswap":
-        return LlamaSwapAPIClient(model, base_url, timeout, bearer_token, default_options)
-    else:
+    # Refusal order is fixed by DEC-003-8: server kind first, then the Ollama protocol refusal, then
+    # the protocol value. Exact string matching throughout (DEC-000-3); the address is never consulted.
+    if server_type not in ("ollama", "openai", "llamaswap"):
         raise ValueError(f"Unsupported server type: {server_type}")
+    if server_type == "ollama":
+        # Any protocol value, even a valid one, is refused: Ollama offers no protocol choice.
+        if protocol is not None:
+            raise ValueError(f"A protocol choice is not offered on Ollama (got protocol={protocol!r})")
+        return OllamaAPIClient(model, base_url, timeout, bearer_token, default_options)
+    # None (not passed) selects the Responses classes, the default protocol (DEC-arch-4).
+    if protocol is None or protocol == "responses":
+        classes = {"openai": OpenAIAPIClient, "llamaswap": LlamaSwapAPIClient}
+    elif protocol == "chat_completions":
+        classes = {"openai": OpenAIChatCompletionsClient, "llamaswap": LlamaSwapChatCompletionsClient}
+    else:
+        raise ValueError(
+            f"Unsupported protocol: {protocol!r}; accepted values are 'responses' and 'chat_completions'"
+        )
+    # The app owns the credential; the factory forwards it to whichever class is chosen and the
+    # library never reads it from the environment (DEC-001-5). The OpenAI constructors refuse a
+    # missing credential themselves.
+    return classes[server_type](model, base_url, timeout, bearer_token, default_options)
 
 
 def substitute_placeholders(template: str, placeholders: Dict[str, str]) -> str:

@@ -1,9 +1,10 @@
 """JSON-only answers (``chat_json``) on the OpenAI-family clients (plan 002.edge-fixes, step 003).
 
 Covers the parse-only check (DEC-002-7): with an expected shape whose fields have no defaults, any valid
-single JSON value is returned unchanged on ``OpenAIAPIClient`` and ``LlamaSwapAPIClient``; a reply that is
-not JSON ends with ``LLMError`` when a shape is given and is returned as is without one. Every expected
-value comes from the step's Definition of done (DoD-15, DoD-16).
+single JSON value is returned unchanged on ``OpenAIChatCompletionsClient`` and ``LlamaSwapChatCompletionsClient``
+(the chat-completions regression suite, feature 003 step 001 DoD-11); a reply that is not JSON ends with
+``LLMError`` when a shape is given and is returned as is without one. Every expected value comes from the
+step's Definition of done (DoD-15, DoD-16).
 """
 
 from typing import Any
@@ -11,8 +12,8 @@ from typing import Any
 import pytest
 
 from llm.exceptions import LLMError
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 MODEL = "some-model"
 OPENAI_BASE_URL = "https://api.example.test/v1"
@@ -43,7 +44,7 @@ NOT_JSON_REPLIES = [
     pytest.param('{"answer": "unterminated', id="truncated-object"),
 ]
 
-Client = OpenAIAPIClient | LlamaSwapAPIClient
+Client = OpenAIChatCompletionsClient | LlamaSwapChatCompletionsClient
 
 
 # ---------------------------------------------------------------------------
@@ -58,14 +59,14 @@ def _tracing_off(monkeypatch):
     monkeypatch.delenv("LLM_TRACE_FOLDER", raising=False)
 
 
-def _openai() -> OpenAIAPIClient:
+def _openai() -> OpenAIChatCompletionsClient:
     """An OpenAI client with an explicit test credential."""
-    return OpenAIAPIClient(model=MODEL, base_url=OPENAI_BASE_URL, bearer_token="sk-test")
+    return OpenAIChatCompletionsClient(model=MODEL, base_url=OPENAI_BASE_URL, bearer_token="sk-test")
 
 
-def _llamaswap() -> LlamaSwapAPIClient:
+def _llamaswap() -> LlamaSwapChatCompletionsClient:
     """A llama-swap client on a local test address with an explicit test credential."""
-    return LlamaSwapAPIClient(model=MODEL, base_url=LLAMASWAP_BASE_URL, bearer_token="sk-test")
+    return LlamaSwapChatCompletionsClient(model=MODEL, base_url=LLAMASWAP_BASE_URL, bearer_token="sk-test")
 
 
 def _serve(monkeypatch, client: Client, content: str) -> list[dict]:

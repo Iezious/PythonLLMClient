@@ -1,9 +1,10 @@
 """Embedding reply checks on the OpenAI-family clients (plan 002.edge-fixes, step 003).
 
-Covers ``embed_batch`` and ``embed`` on ``OpenAIAPIClient`` and ``LlamaSwapAPIClient``: one vector per text,
-ordering by position when every entry carries an integer position (DEC-002-8), malformed and unreadable
-replies ending with ``LLMError`` (DEC-002-8, DEC-002-10), and request-helper refusals passing through
-unchanged. Every expected value comes from the step's Definition of done (DoD-1..DoD-10) and its decisions.
+Covers ``embed_batch`` and ``embed`` on ``OpenAIChatCompletionsClient`` and ``LlamaSwapChatCompletionsClient``
+(the chat-completions regression suite, feature 003 step 001 DoD-11): one vector per text, ordering by
+position when every entry carries an integer position (DEC-002-8), malformed and unreadable replies ending
+with ``LLMError`` (DEC-002-8, DEC-002-10), and request-helper refusals passing through unchanged. Every
+expected value comes from the step's Definition of done (DoD-1..DoD-10) and its decisions.
 """
 
 import copy
@@ -16,8 +17,8 @@ import aiohttp
 import pytest
 
 from llm.exceptions import LLMError
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 EMBED_MODEL = "text-embedding-test"
 OPENAI_BASE_URL = "https://api.example.test/v1"
@@ -27,7 +28,7 @@ TEXTS = ["alpha", "beta", "gamma"]
 # One distinct vector per text, so a wrong order or a dropped entry is visible in the result.
 VEC = {"alpha": [0.1, 0.2], "beta": [0.3, 0.4], "gamma": [0.5, 0.6]}
 
-Client = OpenAIAPIClient | LlamaSwapAPIClient
+Client = OpenAIChatCompletionsClient | LlamaSwapChatCompletionsClient
 
 
 # ---------------------------------------------------------------------------
@@ -42,14 +43,14 @@ def _tracing_off(monkeypatch):
     monkeypatch.delenv("LLM_TRACE_FOLDER", raising=False)
 
 
-def _openai() -> OpenAIAPIClient:
+def _openai() -> OpenAIChatCompletionsClient:
     """An OpenAI client with an explicit test credential."""
-    return OpenAIAPIClient(model=EMBED_MODEL, base_url=OPENAI_BASE_URL, bearer_token="sk-test")
+    return OpenAIChatCompletionsClient(model=EMBED_MODEL, base_url=OPENAI_BASE_URL, bearer_token="sk-test")
 
 
-def _llamaswap() -> LlamaSwapAPIClient:
+def _llamaswap() -> LlamaSwapChatCompletionsClient:
     """A llama-swap client on a local test address with an explicit test credential."""
-    return LlamaSwapAPIClient(model=EMBED_MODEL, base_url=LLAMASWAP_BASE_URL, bearer_token="sk-test")
+    return LlamaSwapChatCompletionsClient(model=EMBED_MODEL, base_url=LLAMASWAP_BASE_URL, bearer_token="sk-test")
 
 
 class _Raises:

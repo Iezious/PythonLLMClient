@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import pytest
 
-from llm.openai import OpenAIAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 
 def assert_think_tags_well_formed(text: str) -> None:
@@ -42,8 +42,8 @@ def _tool_call_delta(
     return entry
 
 
-def _client_with_stream(monkeypatch, frames: List[str]) -> OpenAIAPIClient:
-    client = OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+def _client_with_stream(monkeypatch, frames: List[str]) -> OpenAIChatCompletionsClient:
+    client = OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
 
     async def fake_iter_sse_data(_response: Any) -> AsyncIterator[str]:
         for frame in frames:

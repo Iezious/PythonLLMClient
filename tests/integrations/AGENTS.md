@@ -2,12 +2,13 @@
 
 <!-- agent-ready:start -->
 
-Live tests against real llama-swap and OpenAI servers; they are part of the default `uv run pytest` run. OpenAI tests take the key from the test environment, pass it as `bearer_token`, and skip without it.
+Live tests against real llama-swap and OpenAI servers; they are part of the default `uv run pytest` run. OpenAI tests take the key from the test environment, pass it as `bearer_token`, and skip without it. The pre-existing files run the chat-completions classes; the `*_protocols.py` files run both protocols through the factory.
 
 ## Contents
 
 **Files:**
 - `__init__.py` — package marker.
+- `test_llamaswap_protocols.py` — live llama-swap chat, generate, chat_json and streaming on both protocols through the factory, plus thinking on / off / explicit effort and failure cases on Responses; never skipped.
 - `test_llm_integrations.py` — basic live calls (generate, chat, embed, embed_batch, get_models) against llama-swap and OpenAI.
 - `test_llm_stream_robustness.py` — live streamed chat in non-English scripts, checking multi-byte text arrives complete on llama-swap and OpenAI.
 - `test_llm_streaming.py` — live streaming chat with a delta callback.
@@ -16,8 +17,9 @@ Live tests against real llama-swap and OpenAI servers; they are part of the defa
 - `test_llm_tools_pydantic.py` — live tool calling with tool definitions built from pydantic models.
 - `test_llm_tools_response_format.py` — live tool calling combined with a JSON answer format.
 - `test_llm_tools_streaming.py` — live streaming tool-calling chat.
+- `test_openai_protocols.py` — live OpenAI chat operations except tool chat on both protocols through the factory, plus thinking on / off and server refusals on Responses; skips without the key.
 
-See also: `docs/architecture/interfaces.md#consumed-backend-apis`
+See also: `docs/architecture/interfaces.md#consumed-backend-apis`; DEC-003-15 (live models and environment variables), DEC-arch-12 (test strategy)
 
 <!-- agent-ready:end -->
 

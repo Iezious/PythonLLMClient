@@ -1,10 +1,14 @@
 """Unit tests for the llama-swap client fixes of feature 001.core-fixes, step 005.
 
-Covers, on ``LlamaSwapAPIClient``: streamed requests opened through the base streamed-request
+Covers, on ``LlamaSwapChatCompletionsClient``: streamed requests opened through the base streamed-request
 helper (credential header, non-2xx and transport failures as ``LLMError``, pieces delivered in
 order), null reply content returned as empty text, and the settings rules (no built-in values,
 stop / token bias / end-user id / response format sent, response-format precedence, merge rules,
 thinking switch, embedding end-user id). Each test names the step-005 DoD clause it covers.
+
+Feature 003.responses-chat, step 001: these tests now build ``LlamaSwapChatCompletionsClient`` (the
+chat-completions regression suite, DoD-11), and the last section checks that its ``chat`` posts to
+``/chat/completions`` (DoD-9 of that step, tagged ``__s001_DoD9``).
 """
 
 import copy
@@ -17,7 +21,7 @@ import pytest
 from yarl import URL
 
 from llm.exceptions import LLMError
-from llm.llama_swap import LlamaSwapAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
 
 _BASE_URL = "http://localhost:8080/v1"
 _CHAT_URL = f"{_BASE_URL}/chat/completions"
@@ -86,9 +90,9 @@ def _tracing_off(monkeypatch):
     monkeypatch.delenv("LLM_TRACE_FOLDER", raising=False)
 
 
-def _client(**kw: Any) -> LlamaSwapAPIClient:
+def _client(**kw: Any) -> LlamaSwapChatCompletionsClient:
     """Build a llama-swap client on the fixed test address; credential and defaults come from ``kw``."""
-    return LlamaSwapAPIClient(model=_MODEL, base_url=_BASE_URL, **kw)
+    return LlamaSwapChatCompletionsClient(model=_MODEL, base_url=_BASE_URL, **kw)
 
 
 def _sse(*payloads: str) -> bytes:
@@ -249,7 +253,7 @@ def _reply(content: str | None, tool_calls: list[dict] | None = None) -> dict[st
     return {"choices": [{"index": 0, "message": message, "finish_reason": "stop"}]}
 
 
-def _fake_request(monkeypatch, client: LlamaSwapAPIClient, replies: list[Any]) -> list[dict[str, Any]]:
+def _fake_request(monkeypatch, client: LlamaSwapChatCompletionsClient, replies: list[Any]) -> list[dict[str, Any]]:
     """Replace ``_request`` with a fake returning ``replies`` in order; returns the captured requests.
 
     Payloads are deep-copied because the client keeps mutating its message list between rounds.
@@ -265,7 +269,7 @@ def _fake_request(monkeypatch, client: LlamaSwapAPIClient, replies: list[Any]) -
 
 
 async def _run_tools(
-    monkeypatch, client: LlamaSwapAPIClient, *, stream: bool, rounds: list[tuple], **kwargs: Any
+    monkeypatch, client: LlamaSwapChatCompletionsClient, *, stream: bool, rounds: list[tuple], **kwargs: Any
 ) -> tuple[str, list[dict[str, Any]]]:
     """Run ``chat_with_tools`` against fakes of both seams; returns the result and every round's body.
 
@@ -596,7 +600,7 @@ def _assert_offered_settings(body: dict[str, Any]) -> None:
         assert body.get(key) == value, f"{key} not sent as set"
 
 
-def _settings_client(where: str) -> tuple[LlamaSwapAPIClient, dict[str, Any] | None]:
+def _settings_client(where: str) -> tuple[LlamaSwapChatCompletionsClient, dict[str, Any] | None]:
     """A client plus per-call options carrying the offered settings either as defaults or per call."""
     if where == "default":
         return _client(default_options=copy.deepcopy(_OFFERED_SETTINGS)), None
@@ -730,7 +734,9 @@ async def test_llamaswap_chat_with_tools_sends_setting_when_parameter_absent__Do
 # ---------------------------------------------------------------------------
 
 
-async def _chat_body(monkeypatch, client: LlamaSwapAPIClient, options: dict[str, Any] | None) -> dict[str, Any]:
+async def _chat_body(
+    monkeypatch, client: LlamaSwapChatCompletionsClient, options: dict[str, Any] | None
+) -> dict[str, Any]:
     """Run a non-streamed chat and return the request body it sent."""
     captured = _fake_request(monkeypatch, client, [_reply("ok")])
     await client.chat([{"role": "user", "content": "Hello"}], options=options)
@@ -890,3 +896,31 @@ async def test_llamaswap_embed_batch_client_user_when_call_has_none__DoD15(monke
     body = captured[0]["json"]
     assert body["user"] == "client-user"
     _assert_no_generation_settings(body)
+
+
+# ---------------------------------------------------------------------------
+# Feature 003.responses-chat, step 001: chat goes to /chat/completions (DoD-9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_llamaswap_chat_completions_chat_posts_to_chat_completions__s001_DoD9(monkeypatch):
+    """003 step 001 DoD-9 (US-056.AC-2): a non-streamed ``chat`` sends one ``POST /chat/completions``."""
+    client = _client()
+    captured = _fake_request(monkeypatch, client, [_reply("ok")])
+
+    await client.chat([{"role": "user", "content": "Hello"}])
+
+    assert [(c["method"], c["path"]) for c in captured] == [("POST", "/chat/completions")]
+
+
+@pytest.mark.asyncio
+async def test_llamaswap_chat_completions_streamed_chat_posts_to_chat_completions__s001_DoD9():
+    """003 step 001 DoD-9 (US-056.AC-2): a streamed ``chat`` also sends its request to ``/chat/completions``."""
+    client = _client()
+    session = _FakeSession(body=_complete_stream("hi"))
+    client.session = session
+
+    await client.chat([{"role": "user", "content": "Hello"}], stream=True)
+
+    assert [(call["method"], call["url"]) for call in session.calls] == [("POST", _CHAT_URL)]

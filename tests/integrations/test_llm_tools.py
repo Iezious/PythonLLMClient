@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 
 def _openai_api_key() -> str:
@@ -55,7 +55,7 @@ async def test_openai_chat_with_tools():
     api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
     called = {"fetch_record": False, "query_index": False}
 
     def _fetch_record(key: str) -> str:
@@ -99,7 +99,7 @@ async def test_llamaswap_chat_with_tools():
 
     model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
 
-    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+    client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
     called = {"fetch_record": False, "query_index": False}
 
     def _fetch_record(key: str) -> str:

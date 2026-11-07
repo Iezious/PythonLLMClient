@@ -1,7 +1,7 @@
 import pytest
 import os
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 # LlamaSwap configuration
 LLAMA_SWAP_BASE_URL = "http://india.loc:9292/v1"
@@ -27,7 +27,7 @@ def _openai_api_key() -> str:
 
 @pytest.mark.asyncio
 async def test_llamaswap_generate():
-    client = LlamaSwapAPIClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
+    client = LlamaSwapChatCompletionsClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
     async with client:
         response = await client.generate("Say hello")
         assert isinstance(response, str)
@@ -35,7 +35,7 @@ async def test_llamaswap_generate():
 
 @pytest.mark.asyncio
 async def test_llamaswap_chat():
-    client = LlamaSwapAPIClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
+    client = LlamaSwapChatCompletionsClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
     messages = [{"role": "user", "content": "What is the capital of France?"}]
     async with client:
         response = await client.chat(messages)
@@ -44,7 +44,7 @@ async def test_llamaswap_chat():
 
 @pytest.mark.asyncio
 async def test_llamaswap_embed():
-    client = LlamaSwapAPIClient(model=LLAMA_SWAP_EMBED_MODEL, base_url=LLAMA_SWAP_BASE_URL)
+    client = LlamaSwapChatCompletionsClient(model=LLAMA_SWAP_EMBED_MODEL, base_url=LLAMA_SWAP_BASE_URL)
     async with client:
         vector = await client.embed("Test embedding")
         assert isinstance(vector, list)
@@ -53,7 +53,7 @@ async def test_llamaswap_embed():
 
 @pytest.mark.asyncio
 async def test_llamaswap_embed_batch():
-    client = LlamaSwapAPIClient(model=LLAMA_SWAP_EMBED_MODEL, base_url=LLAMA_SWAP_BASE_URL)
+    client = LlamaSwapChatCompletionsClient(model=LLAMA_SWAP_EMBED_MODEL, base_url=LLAMA_SWAP_BASE_URL)
     texts = ["Batch text 1", "Batch text 2", "Batch text 3"]
     async with client:
         # Get batch vectors
@@ -67,7 +67,7 @@ async def test_llamaswap_embed_batch():
 
 @pytest.mark.asyncio
 async def test_llamaswap_get_models():
-    client = LlamaSwapAPIClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
+    client = LlamaSwapChatCompletionsClient(model=LLAMA_SWAP_GEN_MODEL, base_url=LLAMA_SWAP_BASE_URL)
     async with client:
         models = await client.get_models()
         assert isinstance(models, list)
@@ -80,7 +80,7 @@ async def test_llamaswap_get_models():
 @pytest.mark.asyncio
 async def test_openai_get_models():
     api_key = _openai_api_key()  # DoD-20
-    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
     async with client:
         models = await client.get_models()
         assert isinstance(models, list)
@@ -93,7 +93,7 @@ async def test_openai_get_models():
 @pytest.mark.asyncio
 async def test_openai_generate():
     api_key = _openai_api_key()  # DoD-20
-    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
     async with client:
         response = await client.generate("Say hello")
         assert isinstance(response, str)
@@ -102,7 +102,7 @@ async def test_openai_generate():
 @pytest.mark.asyncio
 async def test_openai_chat():
     api_key = _openai_api_key()  # DoD-20
-    client = OpenAIAPIClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=OPENAI_GEN_MODEL, bearer_token=api_key)
     messages = [{"role": "user", "content": "What is the capital of Japan?"}]
     async with client:
         response = await client.chat(messages)
@@ -112,7 +112,7 @@ async def test_openai_chat():
 @pytest.mark.asyncio
 async def test_openai_embed():
     api_key = _openai_api_key()  # DoD-20
-    client = OpenAIAPIClient(model=OPENAI_EMBED_MODEL, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=OPENAI_EMBED_MODEL, bearer_token=api_key)
     async with client:
         vector = await client.embed("Test embedding")
         assert isinstance(vector, list)
@@ -122,7 +122,7 @@ async def test_openai_embed():
 @pytest.mark.asyncio
 async def test_openai_embed_batch():
     api_key = _openai_api_key()  # DoD-20
-    client = OpenAIAPIClient(model=OPENAI_EMBED_MODEL, bearer_token=api_key)
+    client = OpenAIChatCompletionsClient(model=OPENAI_EMBED_MODEL, bearer_token=api_key)
     texts = ["Batch text A", "Batch text B"]
     async with client:
         # Get batch vectors

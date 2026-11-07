@@ -24,7 +24,7 @@ import pytest
 from yarl import URL
 
 from llm.exceptions import LLMError
-from llm.openai import OpenAIAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 STREAM_URL = "http://stream.test.invalid/v1/chat/completions"
 
@@ -68,9 +68,9 @@ class _FakeResponse:
         self.content = _FakeContent(chunks, error)
 
 
-def _client() -> OpenAIAPIClient:
+def _client() -> OpenAIChatCompletionsClient:
     """A chat-completions client with an explicit test credential (never from the environment)."""
-    return OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+    return OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
 
 
 async def _read_events(chunks: list[bytes], error: BaseException | None = None) -> list[str]:
@@ -99,7 +99,7 @@ def _piece(
     return json.dumps(piece, ensure_ascii=False)
 
 
-def _stubbed_client(monkeypatch, payloads: list[str]) -> OpenAIAPIClient:
+def _stubbed_client(monkeypatch, payloads: list[str]) -> OpenAIChatCompletionsClient:
     """A client whose reader is replaced by one yielding the given data payloads."""
     client = _client()
 

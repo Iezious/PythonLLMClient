@@ -1,7 +1,7 @@
 import pytest
 
-from llm.openai import OpenAIAPIClient
-from llm.llama_swap import LlamaSwapAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
 from llm.exceptions import LLMError
 
 
@@ -13,7 +13,9 @@ SAMPLE_MODELS = [
 
 @pytest.mark.asyncio
 async def test_openai_get_models(monkeypatch):
-    client = OpenAIAPIClient(model="gpt-4o-mini", base_url="https://api.openai.com/v1", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(
+        model="gpt-4o-mini", base_url="https://api.openai.com/v1", bearer_token="sk-test"
+    )
 
     async def fake_request(method, path, **kw):
         assert method == "GET"
@@ -28,7 +30,7 @@ async def test_openai_get_models(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llamaswap_get_models(monkeypatch):
-    client = LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1")
+    client = LlamaSwapChatCompletionsClient(model="some-model", base_url="http://localhost:8080/v1")
 
     async def fake_request(method, path, **kw):
         assert method == "GET"
@@ -43,7 +45,9 @@ async def test_llamaswap_get_models(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_get_models_invalid_response(monkeypatch):
-    client = OpenAIAPIClient(model="gpt-4o-mini", base_url="https://api.openai.com/v1", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(
+        model="gpt-4o-mini", base_url="https://api.openai.com/v1", bearer_token="sk-test"
+    )
 
     async def fake_request(method, path, **kw):
         return {"error": "something went wrong"}
@@ -55,7 +59,7 @@ async def test_openai_get_models_invalid_response(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llamaswap_get_models_invalid_response(monkeypatch):
-    client = LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1")
+    client = LlamaSwapChatCompletionsClient(model="some-model", base_url="http://localhost:8080/v1")
 
     async def fake_request(method, path, **kw):
         return {"error": "something went wrong"}
