@@ -1,14 +1,16 @@
 import pytest
 
 from llm.ollama import OllamaAPIClient
-from llm.openai import OpenAIAPIClient
-from llm.llama_swap import LlamaSwapAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
 from llm.exceptions import LLMError
 
 
 @pytest.mark.asyncio
 async def test_openai_embed_batch_parsing(monkeypatch):
-    client = OpenAIAPIClient(model="text-embedding-3-small", base_url="https://api.openai.com/v1", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(
+        model="text-embedding-3-small", base_url="https://api.openai.com/v1", bearer_token="sk-test"
+    )
 
     async def fake_request(method, path, **kw):
         assert method == "POST"
@@ -29,7 +31,7 @@ async def test_openai_embed_batch_parsing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llamaswap_embed_batch_parsing(monkeypatch):
-    client = LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1")
+    client = LlamaSwapChatCompletionsClient(model="some-model", base_url="http://localhost:8080/v1")
 
     async def fake_request(method, path, **kw):
         assert method == "POST"
@@ -68,7 +70,9 @@ async def test_ollama_embed_batch_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_embed_single_wrapper(monkeypatch):
-    client = OpenAIAPIClient(model="text-embedding-3-small", base_url="https://api.openai.com/v1", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(
+        model="text-embedding-3-small", base_url="https://api.openai.com/v1", bearer_token="sk-test"
+    )
 
     async def fake_request(method, path, **kw):
         return {"data": [{"embedding": [0.42]}]}

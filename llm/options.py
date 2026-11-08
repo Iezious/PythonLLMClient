@@ -1,4 +1,8 @@
-from typing import Optional, Dict, List, Union
+"""Typed option dicts (TypedDict) for the LLM clients.
+
+Gives callers and backends one typed vocabulary for sampling/generation options per backend.
+"""
+from typing import Any, Optional, Dict, Union
 from typing_extensions import TypedDict
 
 class BaseLLMOptions(TypedDict, total=False):
@@ -40,6 +44,7 @@ class OpenAIOptions(BaseLLMOptions, total=False):
     logit_bias: Optional[Dict[str, float]]
     user: Optional[str]
     stop: Optional[Union[list[str], str]]
-    response_format: Optional[Dict[str, str]]
+    # JSON-object or JSON-schema response format; values may be nested objects (DEC-001-14).
+    response_format: Optional[Dict[str, Any]]
     enable_thinking: Optional[bool]
     reasoning_effort: Optional[str]

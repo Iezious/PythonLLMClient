@@ -1,8 +1,8 @@
 """Unit tests for streaming chat_with_tools in OpenAI and LlamaSwap backends."""
 import pytest
 
-from llm.openai import OpenAIAPIClient
-from llm.llama_swap import LlamaSwapAPIClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
 
 _TOOL_DEFS = [
     {
@@ -37,7 +37,7 @@ TOOLS = {"add": _add}
 
 @pytest.mark.asyncio
 async def test_openai_streaming_with_tool_call(monkeypatch):
-    client = OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
     call_count = 0
     captured_payloads = []
 
@@ -68,7 +68,7 @@ async def test_openai_streaming_with_tool_call(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_streaming_on_delta_called(monkeypatch):
-    client = OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
     received = []
 
     async def on_delta(text: str) -> None:
@@ -95,7 +95,7 @@ async def test_openai_streaming_on_delta_called(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_no_tool_call_streaming(monkeypatch):
-    client = OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
     call_count = 0
 
     async def fake_stream_request(payload, on_delta=None):
@@ -117,7 +117,7 @@ async def test_openai_no_tool_call_streaming(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_non_streaming_unchanged(monkeypatch):
-    client = OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
     call_count = 0
 
     async def fake_request(method, path, **kw):
@@ -145,7 +145,7 @@ async def test_openai_non_streaming_unchanged(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_streaming_max_loops_exceeded(monkeypatch):
-    client = OpenAIAPIClient(model="gpt-4o-mini", bearer_token="sk-test")
+    client = OpenAIChatCompletionsClient(model="gpt-4o-mini", bearer_token="sk-test")
 
     async def fake_stream_request(payload, on_delta=None):
         return ("", [{"id": "c1", "type": "function", "function": {"name": "add", "arguments": '{"a": 1, "b": 1}'}}])
@@ -169,7 +169,7 @@ async def test_openai_streaming_max_loops_exceeded(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llamaswap_streaming_with_tool_call(monkeypatch):
-    client = LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1")
+    client = LlamaSwapChatCompletionsClient(model="some-model", base_url="http://localhost:8080/v1")
     call_count = 0
     captured_payloads = []
 
@@ -199,7 +199,7 @@ async def test_llamaswap_streaming_with_tool_call(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llamaswap_no_tool_call_streaming(monkeypatch):
-    client = LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1")
+    client = LlamaSwapChatCompletionsClient(model="some-model", base_url="http://localhost:8080/v1")
 
     async def fake_stream_request(payload, on_delta=None):
         return ("Direct answer.", [])
@@ -217,7 +217,7 @@ async def test_llamaswap_no_tool_call_streaming(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llamaswap_streaming_max_loops_exceeded(monkeypatch):
-    client = LlamaSwapAPIClient(model="some-model", base_url="http://localhost:8080/v1")
+    client = LlamaSwapChatCompletionsClient(model="some-model", base_url="http://localhost:8080/v1")
 
     async def fake_stream_request(payload, on_delta=None):
         return ("", [{"id": "c1", "type": "function", "function": {"name": "add", "arguments": '{"a": 1, "b": 1}'}}])

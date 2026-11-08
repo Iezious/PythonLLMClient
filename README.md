@@ -4,11 +4,31 @@ Async Python client library for interacting with LLM APIs. Provides a unified in
 
 ## Supported Backends
 
-| Backend | Class | Default URL |
-|---------|-------|-------------|
-| **Ollama** | `OllamaAPIClient` | `http://localhost:11434` |
-| **OpenAI** | `OpenAIAPIClient` | `https://api.openai.com/v1` |
-| **llama-swap** | `LlamaSwapAPIClient` | `http://localhost:8080/v1` |
+| Backend | Responses protocol (default) | Chat Completions protocol | Default URL |
+|---------|------------------------------|---------------------------|-------------|
+| **Ollama** | -- | `OllamaAPIClient` (native Ollama API, no protocol choice) | `http://localhost:11434` |
+| **OpenAI** | `OpenAIAPIClient` | `OpenAIChatCompletionsClient` | `https://api.openai.com/v1` |
+| **llama-swap** | `LlamaSwapAPIClient` | `LlamaSwapChatCompletionsClient` | `http://localhost:8080/v1` |
+
+### Protocols
+
+OpenAI and llama-swap are each offered over two wire protocols, one class per protocol:
+
+- **Responses** (`/responses`) — `OpenAIAPIClient`, `LlamaSwapAPIClient`. This is the default.
+- **Chat Completions** (`/chat/completions`) — `OpenAIChatCompletionsClient`, `LlamaSwapChatCompletionsClient`.
+  These keep the behaviour the library had before the protocol split under the new names.
+
+The two classes of a backend are independent (neither subclasses the other) and share the same constructor,
+methods and settings keys. A class never switches protocol on its own, and the address never decides the protocol.
+
+> **Upgrading from 0.2.x:** `OpenAIAPIClient` and `LlamaSwapAPIClient` now speak the Responses protocol.
+> To keep the previous chat-completions behaviour, use `OpenAIChatCompletionsClient` /
+> `LlamaSwapChatCompletionsClient` or pass `protocol="chat_completions"` to the factory.
+
+Tool conversations (`chat_with_tools`) run on both protocols. On the Responses classes they go over
+`/responses`, streamed and not; the reasoning of each round is carried to the later rounds of the same call
+(never into the caller's conversation or the answer), and `response_format` is accepted and translated to the
+protocol's text-format setting. The chat-completions classes remain the alternative protocol for tool calling.
 
 ## Installation
 
@@ -36,23 +56,50 @@ async with get_llm_client("ollama", "http://localhost:11434", "llama3.2") as cli
         {"role": "user", "content": "Hello!"}
     ])
     print(reply)
+
+# OpenAI over Responses (the default protocol); the app passes the credential
+client = get_llm_client("openai", "https://api.openai.com/v1", "gpt-4o", bearer_token=api_key)
+
+# llama-swap over Chat Completions
+client = get_llm_client("llamaswap", "http://localhost:8080/v1", "qwen3", protocol="chat_completions")
 ```
+
+`get_llm_client(server_type, base_url, model, timeout=600.0, bearer_token=None, default_options=None, protocol=None)`
+picks the class from `server_type` and `protocol` and forwards the other arguments unchanged:
+
+| `server_type` | `protocol=None` or `"responses"` | `protocol="chat_completions"` |
+|---------------|----------------------------------|-------------------------------|
+| `"openai"` | `OpenAIAPIClient` | `OpenAIChatCompletionsClient` |
+| `"llamaswap"` | `LlamaSwapAPIClient` | `LlamaSwapChatCompletionsClient` |
+| `"ollama"` | `OllamaAPIClient` (only with `protocol=None`) | refused |
+
+The factory raises `ValueError` for:
+
+- an unknown `server_type` (the message names it);
+- any `protocol` given with `"ollama"` — a protocol choice is not offered on Ollama;
+- a `protocol` other than `"responses"` or `"chat_completions"` (the message names the value). Matching is exact:
+  `"Responses"` or `" responses"` is refused;
+- `"openai"` without a `bearer_token`, whichever protocol.
 
 ### Direct client instantiation
 
 ```python
-from llm import OllamaAPIClient, OpenAIAPIClient
+from llm import OllamaAPIClient, OpenAIAPIClient, OpenAIChatCompletionsClient
 
 # Ollama
 async with OllamaAPIClient("llama3.2") as client:
     reply = await client.generate("Explain quantum computing in one sentence.")
 
-# OpenAI (reads OPENAI_API_KEY from environment)
-async with OpenAIAPIClient("gpt-4o") as client:
+# OpenAI over Responses; the credential comes only from bearer_token, never from the environment
+async with OpenAIAPIClient("gpt-4o", bearer_token=api_key) as client:
     reply = await client.chat([
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hello!"}
     ])
+
+# OpenAI over Chat Completions (same constructor and methods)
+async with OpenAIChatCompletionsClient("gpt-4o", bearer_token=api_key) as client:
+    reply = await client.generate("Hello!")
 ```
 
 ## Features
@@ -90,6 +137,9 @@ json_str = await client.chat_json([
 ```
 
 ### Tool Calling
+
+On OpenAI and llama-swap, `chat_with_tools` works on both the Responses classes and the chat-completions
+classes, streamed and not (see [Protocols](#protocols)).
 
 ```python
 def get_weather(city: str) -> dict:
@@ -165,8 +215,10 @@ reply = await client.chat_with_tools(
 
 | Backend | `json_object` | `json_schema` | Notes |
 | --------- | :-----------: | :-----------: | ------- |
-| OpenAI | Yes | Yes | Full support |
-| llama-swap | Yes | Yes | Depends on underlying engine (vLLM, llama.cpp) |
+| OpenAI (`OpenAIAPIClient`, Responses) | Yes | Yes | Same `response_format` shape, translated to the Responses text format |
+| OpenAI (`OpenAIChatCompletionsClient`) | Yes | Yes | Full support |
+| llama-swap (`LlamaSwapAPIClient`, Responses) | Yes | Yes | Same `response_format` shape, translated to the Responses text format; depends on underlying engine (vLLM, llama.cpp) |
+| llama-swap (`LlamaSwapChatCompletionsClient`) | Yes | Yes | Depends on underlying engine (vLLM, llama.cpp) |
 | Ollama | Yes | -- | Translated to `format="json"` internally |
 
 ### Embeddings
@@ -197,28 +249,49 @@ reply = await client.chat(messages, options=OpenAIOptions(
 ))
 ```
 
+Both protocols accept the same settings keys. The Responses protocol has no counterpart for some of them
+(`presence_penalty`, `frequency_penalty`, `seed`, `stop`, `logit_bias`): the Responses classes do not send
+such a setting and emit an `LLMSettingIgnoredWarning` naming it, once per setting per client instance.
+
+### Ignored-setting warning
+
+`LLMSettingIgnoredWarning` (exported from `llm`) is a `UserWarning` subclass. It is a warning, never an error;
+filter or escalate it by category with Python's `warnings` module:
+
+```python
+import warnings
+from llm import LLMSettingIgnoredWarning
+
+warnings.filterwarnings("ignore", category=LLMSettingIgnoredWarning)   # silence it
+warnings.filterwarnings("error", category=LLMSettingIgnoredWarning)    # or turn it into an exception
+```
+
 ## Architecture
 
 ```
 llm/
   __init__.py       # Public API exports
-  exceptions.py     # LLMError exception
+  exceptions.py     # LLMError exception, LLMSettingIgnoredWarning category
   message.py        # LLMMessage TypedDict
   options.py        # BaseLLMOptions, OllamaOptions, OpenAIOptions
-  llm_client.py     # Abstract base class (LLMClient)
+  llm_client.py     # Shared base class (LLMClient): HTTP/SSE plumbing, options merge; no abc
   ollama.py         # OllamaAPIClient
-  openai.py         # OpenAIAPIClient
-  llama_swap.py     # LlamaSwapAPIClient
+  openai.py         # OpenAIAPIClient (Responses)
+  openai_chat_completions.py      # OpenAIChatCompletionsClient (Chat Completions)
+  llama_swap.py     # LlamaSwapAPIClient (Responses)
+  llama_swap_chat_completions.py  # LlamaSwapChatCompletionsClient (Chat Completions)
+  tools.py          # pydantic_to_openai_tool helper
   trace.py          # LLMTracer — debug trace logging
   llm.py            # Factory (get_llm_client) + utilities
+  py.typed          # PEP 561 typing marker
 ```
 
 ## Environment Variables
 
+The library never reads a credential from the environment: the app passes the OpenAI key as `bearer_token`.
+
 | Variable | Used By | Purpose |
 | -------- | ------- | ------- |
-| `OPENAI_API_KEY` | `OpenAIAPIClient` | API authentication |
-| `OPEN_AI_KEY` | `OpenAIAPIClient` | Alternative API key variable |
 | `LLM_TRACE` | All clients | Enable trace logging (`1`, `true`, or `on`) |
 | `LLM_TRACE_FOLDER` | All clients | Directory for trace log files |
 

@@ -3,8 +3,25 @@ import os
 
 import pytest
 
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
+
+
+def _openai_api_key() -> str:
+    """Return the OpenAI key from the test's own environment, skipping the test when absent.
+
+    The test reads the key and passes it as ``bearer_token``; the library never
+    reads the environment itself (DEC-001-6).
+    """
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPEN_AI_KEY")
+    if not key:
+        pytest.skip("OPENAI_API_KEY / OPEN_AI_KEY not set")
+    return key
+
+
+# llama.cpp rejects a json_schema grammar combined with tools ("failed to parse grammar"); a server
+# limitation, not a library defect. Non-strict so a server fix shows up as XPASS (DEC-005-9).
+_LLAMA_SWAP_JSON_SCHEMA_XFAIL = pytest.mark.xfail(strict=False, reason="llama.cpp json_schema grammar with tools")
 
 
 TOOLS_DEFINITIONS = [
@@ -96,11 +113,10 @@ def _assert_valid_result(response: str, called: dict):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_openai_tools_response_format_json_object():
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
     called, tools = _make_tools()
 
     async with client:
@@ -118,11 +134,10 @@ async def test_openai_tools_response_format_json_object():
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_openai_tools_response_format_json_schema():
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
     called, tools = _make_tools()
 
     async with client:
@@ -140,11 +155,10 @@ async def test_openai_tools_response_format_json_schema():
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_openai_tools_streaming_response_format():
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_TOOL_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
     called, tools = _make_tools()
     chunks: list[str] = []
 
@@ -168,6 +182,7 @@ async def test_openai_tools_streaming_response_format():
 # ---------------------------------------------------------------------------
 # LlamaSwap — json_schema mode
 # ---------------------------------------------------------------------------
+@_LLAMA_SWAP_JSON_SCHEMA_XFAIL
 @pytest.mark.asyncio
 async def test_llamaswap_tools_response_format_json_schema():
     base_url = (
@@ -175,9 +190,9 @@ async def test_llamaswap_tools_response_format_json_schema():
         or os.environ.get("LLAMA_SWAP_BASE_URL")
         or "http://india.loc:9292/v1"
     )
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
-    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+    client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
     _, tools = _make_tools()
 
     async with client:
@@ -197,6 +212,7 @@ async def test_llamaswap_tools_response_format_json_schema():
 # ---------------------------------------------------------------------------
 # LlamaSwap — streaming + json_schema
 # ---------------------------------------------------------------------------
+@_LLAMA_SWAP_JSON_SCHEMA_XFAIL
 @pytest.mark.asyncio
 async def test_llamaswap_tools_streaming_response_format():
     base_url = (
@@ -204,9 +220,9 @@ async def test_llamaswap_tools_streaming_response_format():
         or os.environ.get("LLAMA_SWAP_BASE_URL")
         or "http://india.loc:9292/v1"
     )
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
-    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+    client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
     _, tools = _make_tools()
     chunks: list[str] = []
 

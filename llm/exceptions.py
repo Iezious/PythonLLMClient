@@ -11,3 +11,12 @@ class LLMError(Exception):
         if self.description:
             return f"{self.message}: {self.description}"
         return self.message
+
+
+class LLMSettingIgnoredWarning(UserWarning):
+    """Warning category for a setting the library accepted but could not apply (DEC-003-5, DEC-arch-6).
+
+    A direct ``UserWarning`` subclass with no behaviour of its own; it exists so an app can filter
+    or escalate the library's ignored-setting warnings by category (``warnings.filterwarnings(...,
+    category=LLMSettingIgnoredWarning)``). Emitted by the Responses clients, never raised as an error.
+    """

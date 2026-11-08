@@ -1,15 +1,27 @@
 import os
 import pytest
-from llm.llama_swap import LlamaSwapAPIClient
-from llm.openai import OpenAIAPIClient
+from llm.llama_swap_chat_completions import LlamaSwapChatCompletionsClient
+from llm.openai_chat_completions import OpenAIChatCompletionsClient
+
+
+def _openai_api_key() -> str:
+    """Return the OpenAI key from the test's own environment, skipping the test when absent.
+
+    The test reads the key and passes it as ``bearer_token``; the library never
+    reads the environment itself (DEC-001-6).
+    """
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPEN_AI_KEY")
+    if not key:
+        pytest.skip("OPENAI_API_KEY / OPEN_AI_KEY not set")
+    return key
+
 
 @pytest.mark.asyncio
 async def test_openai_chat_streaming():
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("OPEN_AI_KEY"):
-        pytest.skip("OPENAI_API_KEY not set")
+    api_key = _openai_api_key()  # DoD-20
 
     model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    client = OpenAIAPIClient(model=model)
+    client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
 
     messages = [{"role": "user", "content": "Write a short poem about the rust programming language."}]
     chunks = []
@@ -37,9 +49,9 @@ async def test_llamaswap_chat_streaming():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
-    client = LlamaSwapAPIClient(model=model, base_url=base_url)
+    client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
     messages = [{"role": "user", "content": "Write a short poem about the rust programming language."}]
     chunks = []
