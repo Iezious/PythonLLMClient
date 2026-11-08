@@ -5,7 +5,7 @@ from llm.openai_chat_completions import OpenAIChatCompletionsClient
 
 # LlamaSwap configuration
 LLAMA_SWAP_BASE_URL = "http://india.loc:9292/v1"
-LLAMA_SWAP_GEN_MODEL = "Qwen3.5-27B-heretic-Q5_K_M"
+LLAMA_SWAP_GEN_MODEL = "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 LLAMA_SWAP_EMBED_MODEL = "bge-large-en-v1.5.i1-Q6_K"
 
 # OpenAI configuration

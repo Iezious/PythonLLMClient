@@ -19,6 +19,11 @@ def _openai_api_key() -> str:
     return key
 
 
+# llama.cpp rejects a json_schema grammar combined with tools ("failed to parse grammar"); a server
+# limitation, not a library defect. Non-strict so a server fix shows up as XPASS (DEC-005-9).
+_LLAMA_SWAP_JSON_SCHEMA_XFAIL = pytest.mark.xfail(strict=False, reason="llama.cpp json_schema grammar with tools")
+
+
 TOOLS_DEFINITIONS = [
     {
         "type": "function",
@@ -177,6 +182,7 @@ async def test_openai_tools_streaming_response_format():
 # ---------------------------------------------------------------------------
 # LlamaSwap — json_schema mode
 # ---------------------------------------------------------------------------
+@_LLAMA_SWAP_JSON_SCHEMA_XFAIL
 @pytest.mark.asyncio
 async def test_llamaswap_tools_response_format_json_schema():
     base_url = (
@@ -184,7 +190,7 @@ async def test_llamaswap_tools_response_format_json_schema():
         or os.environ.get("LLAMA_SWAP_BASE_URL")
         or "http://india.loc:9292/v1"
     )
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
     client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
     _, tools = _make_tools()
@@ -206,6 +212,7 @@ async def test_llamaswap_tools_response_format_json_schema():
 # ---------------------------------------------------------------------------
 # LlamaSwap — streaming + json_schema
 # ---------------------------------------------------------------------------
+@_LLAMA_SWAP_JSON_SCHEMA_XFAIL
 @pytest.mark.asyncio
 async def test_llamaswap_tools_streaming_response_format():
     base_url = (
@@ -213,7 +220,7 @@ async def test_llamaswap_tools_streaming_response_format():
         or os.environ.get("LLAMA_SWAP_BASE_URL")
         or "http://india.loc:9292/v1"
     )
-    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_TOOL_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
     client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
     _, tools = _make_tools()

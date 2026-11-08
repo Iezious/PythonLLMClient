@@ -232,16 +232,24 @@ def _responses_text_format(response_format: Any) -> Any:
     return response_format
 
 
-def _responses_reply_text(response: Any) -> str:
-    """Return the answer text of a non-streamed Responses reply (DEC-003-12).
+def _responses_reply_text(response: Any, *, output_limit_set: bool = False) -> str:
+    """Return the answer text of a non-streamed Responses reply (DEC-003-12, DEC-arch-13).
 
     Visits every item of type ``message`` in the reply's ``output`` list in order and concatenates,
     with no separator, the ``text`` of each content part of type ``output_text``. Reasoning items and
     other part types (e.g. refusal) are ignored. A missing or non-list ``output``, no message item, or
     a null/missing ``text`` gives ``""``.
 
+    When ``output_limit_set`` is true and the reply is ``incomplete`` with ``incomplete_details`` a
+    mapping whose ``reason`` is exactly ``"max_output_tokens"`` (DEC-003-18), the reply was cut at the
+    app's own output limit: the text is extracted and returned exactly as for a completed reply
+    (DEC-arch-13, DEC-003-19). With the flag off (the default), or any other incomplete reason, the
+    reply raises as listed under Raises (DEC-003-17).
+
     Args:
         response: The decoded reply body (expected to be a mapping).
+        output_limit_set: Keyword-only; true when the calling operation's wire settings hold
+            ``max_output_tokens``, i.e. the app set the output limit (DEC-003-17, DEC-003-20).
 
     Returns:
         The concatenated output text; ``""`` when there is none.
@@ -250,7 +258,9 @@ def _responses_reply_text(response: Any) -> str:
         LLMError: ``status`` is ``"failed"`` -- description is ``error.message`` when ``error`` is a
             mapping with a string ``message``, else the ``error`` value as JSON text; or ``status`` is
             ``"incomplete"`` -- description is ``incomplete_details.reason`` when present, else the
-            ``incomplete_details`` value as JSON text. Any other or missing status extracts the text.
+            ``incomplete_details`` value as JSON text -- unless ``output_limit_set`` is true and the
+            reason is exactly ``"max_output_tokens"`` (then the text is returned, DEC-003-19). Any other
+            or missing status extracts the text.
             A reply that is not a mapping surfaces as a generic error.
     """
     if not isinstance(response, Mapping):
@@ -267,9 +277,12 @@ def _responses_reply_text(response: Any) -> str:
     if status == "incomplete":
         details = response.get("incomplete_details")
         detail_reason = details.get("reason") if isinstance(details, Mapping) else None
-        reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
-        # DEC-003-12: a cut-off answer is never returned as if complete.
-        raise LLMError("OpenAI Responses reply is incomplete", description=reason)
+        # DEC-arch-13 / DEC-003-18: only the exact string reason, and only when the app set the limit,
+        # is a cut the app asked for; it falls through to the completed-reply extraction (DEC-003-19).
+        if not (output_limit_set and isinstance(detail_reason, str) and detail_reason == "max_output_tokens"):
+            reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
+            # DEC-003-12: any other cut-off answer is never returned as if complete.
+            raise LLMError("OpenAI Responses reply is incomplete", description=reason)
 
     output = response.get("output")
     if not isinstance(output, list):
@@ -375,26 +388,41 @@ def _flatten_responses_tools(tools_definitions: list[dict[str, Any]]) -> list[di
     return flat_tools
 
 
-def _read_responses_tool_round(response: Any) -> _ResponsesToolRound:
+def _read_responses_tool_round(response: Any, *, output_limit_set: bool = False) -> _ResponsesToolRound:
     """Read one non-streamed tool-round reply into text, tool calls and carry items (DEC-004-8).
 
-    The status is checked first exactly as in DEC-003-12; then ``output`` is visited in order:
-    ``function_call`` items become the round's calls (dense from 0), ``message`` items give the round
-    text, ``reasoning`` items are kept verbatim; every other item type is ignored.
+    The status is checked first exactly as in DEC-003-12 (with the output-limit exception of
+    DEC-003-17 / DEC-003-18 handed on); then ``output`` is visited in order: ``function_call`` items
+    become the round's calls (dense from 0), ``message`` items give the round text, ``reasoning`` items
+    are kept verbatim; every other item type is ignored.
+
+    A round cut at the app's own output limit (DEC-arch-13): with ``output_limit_set`` on and the
+    reply ``incomplete`` for reason exactly ``"max_output_tokens"``, a round holding no
+    ``function_call`` item is returned with its text and no tool calls, so the loop treats it as the
+    answer; a round holding any ``function_call`` item raises ``LLMError`` with the server's reason,
+    because its calls' arguments may be truncated (DEC-004-16). With no app limit (flag off), and for
+    every other early end, the round raises as before (DEC-004-8).
 
     Args:
         response: The decoded reply body of ``POST /responses``.
+        output_limit_set: Keyword-only; ``True`` when the app set the output limit for this call
+            (DEC-004-15, computed once per call by ``chat_with_tools``). With it on, a round cut at the
+            app's limit (DEC-003-18) is the answer when it holds no ``function_call`` item and raises
+            ``LLMError`` with the server's reason when it holds any (DEC-arch-13, DEC-004-16). Default
+            off: a cut round raises as before.
 
     Returns:
         The round's text, tool calls and reasoning items.
 
     Raises:
         LLMError: The reply is not a mapping, or its ``status`` is ``"failed"`` / ``"incomplete"``
-            (description carries the server's reason, as in ``_responses_reply_text``).
+            (description carries the server's reason, as in ``_responses_reply_text``) -- except an
+            ``incomplete`` reply cut at the app's limit with ``output_limit_set`` on and no
+            ``function_call`` item, which is returned (DEC-004-16).
     """
     # Status (and the mapping check) first, and the round text, by the very rule of the non-tool
-    # path: DEC-004-8 reuses DEC-003-12 unchanged.
-    text = _responses_reply_text(response)
+    # path: DEC-004-8 reuses DEC-003-12, and the flag hands on the DEC-003-18 match (DEC-004-15).
+    text = _responses_reply_text(response, output_limit_set=output_limit_set)
     tool_calls: list[dict[str, Any]] = []
     reasoning: list[dict[str, Any]] = []
     output = response.get("output")
@@ -416,6 +444,11 @@ def _read_responses_tool_round(response: Any) -> _ResponsesToolRound:
             elif kind == "reasoning":
                 # Verbatim, including empty encrypted content from local servers (DEC-004-7).
                 reasoning.append(item)
+    # An ``incomplete`` reply only gets here when ``_responses_reply_text`` matched a cut at the app's
+    # limit. DEC-004-16: its calls' arguments may be truncated, so the round is not run; the error
+    # keeps the wording and reason of any other incomplete round.
+    if tool_calls and response.get("status") == "incomplete":
+        raise LLMError("OpenAI Responses reply is incomplete", description="max_output_tokens")
     return _ResponsesToolRound(text=text, tool_calls=tool_calls, reasoning=reasoning)
 
 
@@ -756,6 +789,8 @@ class OpenAIAPIClient(LLMClient):
         self,
         response: aiohttp.ClientResponse,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        output_limit_set: bool = False,
     ) -> str:
         """Parse an open Responses event stream into the full delivered text (DEC-003-13, DEC-arch-11).
 
@@ -772,7 +807,11 @@ class OpenAIAPIClient(LLMClient):
         - ``response.failed`` -> ``LLMError``, description ``response.error.message`` when a string,
           else ``response.error`` as JSON text.
         - ``response.incomplete`` -> ``LLMError``, description ``response.incomplete_details.reason``
-          when present, else that value as JSON text.
+          when present, else that value as JSON text -- except when ``output_limit_set`` is true and
+          that ``reason`` is exactly ``"max_output_tokens"`` (DEC-003-18): the stream was cut at the
+          app's own output limit and ends exactly as at ``response.completed`` (an open reasoning
+          block is closed by its own ``</think>`` piece, nothing further is read or delivered, the
+          return equals what the receiver got; DEC-arch-13, DEC-003-19).
         - ``error`` -> ``LLMError``, description the event's ``message`` when a string, else the
           event as JSON text.
         - Every other type (created, in_progress, output_item.*, content_part.*, ``*.done``, tool
@@ -781,7 +820,8 @@ class OpenAIAPIClient(LLMClient):
         Empty or missing deltas deliver nothing. Reasoning markers follow DEC-000-20 per run of
         reasoning: the first reasoning piece at the start or after text is prefixed with
         ``<think>``; the first text piece after reasoning is prefixed with ``</think>``; a block still
-        open when ``response.completed`` arrives is closed by delivering ``</think>`` as its own piece.
+        open when ``response.completed`` (or a cut at the app's limit, see above) arrives is closed by
+        delivering ``</think>`` as its own piece.
         A stream without reasoning events carries no markers. Each piece is delivered to
         ``on_delta`` as soon as it is parsed (its result awaited when awaitable, DEC-000-23) and
         appended to the returned text, so the return equals the concatenation of what the receiver
@@ -791,15 +831,19 @@ class OpenAIAPIClient(LLMClient):
             response: The open streamed response yielded by ``self._stream_post``; only passed to
                 ``self._iter_sse_data`` (tests pass ``None`` with that reader replaced, DEC-003-16).
             on_delta: Optional receiver for each piece; when ``None`` pieces are only accumulated.
+            output_limit_set: Keyword-only; true when the calling operation's wire settings hold
+                ``max_output_tokens``, i.e. the app set the output limit (DEC-003-17, DEC-003-20).
+                Default false keeps every ``response.incomplete`` event an error.
 
         Returns:
             The full delivered text, reasoning included with its markers.
 
         Raises:
-            LLMError: On a ``response.failed``, ``response.incomplete`` or ``error`` event (carrying
-                the server's reason); when the stream ends without ``response.completed`` (also after
-                a ``[DONE]`` sentinel; the Responses form of DEC-001-1); on reader failures
-                (DEC-001-7, raised by ``_iter_sse_data``).
+            LLMError: On a ``response.failed``, ``response.incomplete`` (other than a cut at the app's
+                limit with ``output_limit_set`` true, DEC-003-18) or ``error`` event (carrying the
+                server's reason); when the stream ends without ``response.completed`` or such a cut
+                (also after a ``[DONE]`` sentinel; the Responses form of DEC-001-1); on reader
+                failures (DEC-001-7, raised by ``_iter_sse_data``).
             Exception: Whatever ``on_delta`` raises propagates unchanged and ends the parse; no later
                 piece is delivered (DEC-000-23).
         """
@@ -861,8 +905,14 @@ class OpenAIAPIClient(LLMClient):
                 inner = event.get("response")
                 details = inner.get("incomplete_details") if isinstance(inner, Mapping) else None
                 detail_reason = details.get("reason") if isinstance(details, Mapping) else None
+                if output_limit_set and isinstance(detail_reason, str) and detail_reason == "max_output_tokens":
+                    # DEC-arch-13 / DEC-003-19: a cut at the app's own limit ends the stream exactly as
+                    # ``response.completed`` does, so markers, receiver and return follow one rule.
+                    if in_reasoning:
+                        await _deliver("</think>")
+                    return "".join(delivered)
                 reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
-                # Same wording as the non-streamed check (DEC-003-12): a cut-off answer is an error.
+                # Same wording as the non-streamed check (DEC-003-12): any other cut-off answer is an error.
                 raise LLMError("OpenAI Responses reply is incomplete", description=reason)
             elif event_type == "error":
                 message = event.get("message")
@@ -879,6 +929,8 @@ class OpenAIAPIClient(LLMClient):
         self,
         response: aiohttp.ClientResponse,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        output_limit_set: bool = False,
     ) -> _ResponsesToolRound:
         """Parse one streamed tool round's Responses event stream (DEC-004-9, DEC-arch-11).
 
@@ -902,7 +954,14 @@ class OpenAIAPIClient(LLMClient):
         - ``response.output_item.done`` with a ``reasoning`` item -> carry item (DEC-004-7), recorded
           with its ``output_index``.
         - ``response.completed`` -> the round is complete; returns at once and reads nothing further.
-        - ``response.failed``, ``response.incomplete``, ``error`` -> ``LLMError`` as in DEC-003-13.
+        - ``response.incomplete`` with ``output_limit_set`` on and reason exactly ``"max_output_tokens"``
+          (a cut at the app's own limit, DEC-arch-13, DEC-004-17): when no tool call has started in the
+          round (no added ``function_call`` item, arguments fragment or done ``function_call`` item),
+          ends the round exactly as ``response.completed`` does (open reasoning closed by its own
+          ``</think>`` piece, returns at once); when a call has started, ``LLMError`` with the server's
+          reason and no further piece, not even a closing marker.
+        - ``response.failed``, ``response.incomplete`` (no app limit, or any other reason / no reason /
+          no details), ``error`` -> ``LLMError`` as in DEC-003-13.
         - Every other type is ignored.
 
         Pieces are delivered to ``on_delta`` as parsed (result awaited when awaitable, DEC-000-23).
@@ -914,6 +973,12 @@ class OpenAIAPIClient(LLMClient):
                 ``self._iter_sse_data`` (tests pass ``None`` with that reader replaced, DEC-004-14).
             on_delta: Optional receiver for each text / reasoning piece; when ``None`` nothing is
                 delivered.
+            output_limit_set: Keyword-only; ``True`` when the app set the output limit for this call
+                (DEC-004-15). With it on, a ``response.incomplete`` event whose reason matches
+                DEC-003-18 ends the round as ``response.completed`` does when no tool call has started
+                in the round; when one has started it raises ``LLMError`` with the server's reason and
+                delivers no further piece, not even a closing marker (DEC-arch-13, DEC-004-17). Default
+                off: the event raises as before.
 
         Returns:
             A ``_ResponsesToolRound``: ``text`` is the text deltas only (no reasoning, no markers);
@@ -924,7 +989,8 @@ class OpenAIAPIClient(LLMClient):
 
         Raises:
             LLMError: On a ``response.failed``, ``response.incomplete`` or ``error`` event (carrying the
-                server's reason); when the stream ends without ``response.completed`` (also after a
+                server's reason) -- except a cut at the app's limit with no started call, which returns
+                (DEC-004-17); when the stream ends without ``response.completed`` (also after a
                 ``[DONE]`` sentinel); on reader failures raised by ``_iter_sse_data``.
             Exception: Whatever ``on_delta`` raises propagates unchanged and ends the parse (DEC-000-23).
         """
@@ -977,6 +1043,38 @@ class OpenAIAPIClient(LLMClient):
                 value = source.get(field)
                 if isinstance(value, str) and value:
                     record[field] = value
+
+        async def _end_round() -> _ResponsesToolRound:
+            """Close the round as ``response.completed`` does and build its result (DEC-004-9).
+
+            Shared by completion and by a cut at the app's limit without a started call (DEC-004-17),
+            so markers, the receiver and the returned round follow one rule.
+
+            Returns:
+                The round's text deltas, tool calls in order of first appearance and carry items
+                ordered by ``output_index``.
+
+            Raises:
+                Exception: Whatever ``on_delta`` raises for the closing marker (DEC-000-23).
+            """
+            if in_reasoning:
+                # Closes a block left open (e.g. reasoning followed only by function calls) so
+                # the next round's pieces start outside it (DEC-004-9).
+                await _deliver("</think>")
+            carried.sort(key=lambda entry: (entry[0] if isinstance(entry[0], int) else float("inf"), entry[1]))
+            tool_calls = [
+                {
+                    "id": record["call_id"],
+                    "type": "function",
+                    "function": {"name": record["name"], "arguments": record["arguments"]},
+                }
+                for record in calls
+            ]
+            return _ResponsesToolRound(
+                text="".join(text_parts),
+                tool_calls=tool_calls,
+                reasoning=[entry[2] for entry in carried],
+            )
 
         async for data in self._iter_sse_data(response):
             try:
@@ -1035,25 +1133,8 @@ class OpenAIAPIClient(LLMClient):
                     # Verbatim from its done event, the one source of carry items (DEC-004-7, DEC-004-9).
                     carried.append((event.get("output_index"), len(carried), item))
             elif event_type == "response.completed":
-                if in_reasoning:
-                    # Closes a block left open (e.g. reasoning followed only by function calls) so
-                    # the next round's pieces start outside it (DEC-004-9).
-                    await _deliver("</think>")
-                carried.sort(key=lambda entry: (entry[0] if isinstance(entry[0], int) else float("inf"), entry[1]))
-                tool_calls = [
-                    {
-                        "id": record["call_id"],
-                        "type": "function",
-                        "function": {"name": record["name"], "arguments": record["arguments"]},
-                    }
-                    for record in calls
-                ]
                 # Completion is final: anything the server sends after it is never read.
-                return _ResponsesToolRound(
-                    text="".join(text_parts),
-                    tool_calls=tool_calls,
-                    reasoning=[entry[2] for entry in carried],
-                )
+                return await _end_round()
             elif event_type == "response.failed":
                 inner = event.get("response")
                 error = inner.get("error") if isinstance(inner, Mapping) else None
@@ -1064,6 +1145,17 @@ class OpenAIAPIClient(LLMClient):
                 inner = event.get("response")
                 details = inner.get("incomplete_details") if isinstance(inner, Mapping) else None
                 detail_reason = details.get("reason") if isinstance(details, Mapping) else None
+                # DEC-004-17: a cut at the app's own limit (exact reason, DEC-003-18) with no started
+                # call is the round's answer and ends as completion does; a started call (any record
+                # in ``calls``, even a nameless fragment) may be truncated, so it falls through to the
+                # error below, which delivers nothing further.
+                if (
+                    output_limit_set
+                    and not calls
+                    and isinstance(detail_reason, str)
+                    and detail_reason == "max_output_tokens"
+                ):
+                    return await _end_round()
                 reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
                 raise LLMError("OpenAI Responses reply is incomplete", description=reason)
             elif event_type == "error":
@@ -1144,6 +1236,12 @@ class OpenAIAPIClient(LLMClient):
         order, through a chunk-logging trace wrapper only when tracing is enabled (DEC-000-48); the
         returned text (equal to everything the receiver got) is logged and returned.
 
+        Output limit (DEC-arch-13, DEC-003-17..19): when the merged wire settings hold
+        ``max_output_tokens`` (the app set ``max_tokens`` / ``context_length`` as a call option or a
+        client default, not cleared with ``None``), a reply or ``response.incomplete`` event cut for
+        reason ``max_output_tokens`` is returned (streamed: delivered) and logged exactly as a
+        completed reply. With no app limit, or any other incomplete reason, it still raises.
+
         Args:
             messages: Conversation messages; the caller's list is never modified.
             system: Optional system instruction, sent as a leading system item when truthy.
@@ -1156,11 +1254,15 @@ class OpenAIAPIClient(LLMClient):
 
         Raises:
             LLMError: Non-2xx reply (address and server reply; never the credential), transport
-                failure, or a failed / incomplete reply (DEC-003-12); streamed: a failure event or a
-                stream ending before ``response.completed`` (DEC-003-13). A receiver failure
+                failure, or a failed / incomplete reply other than a cut at the app's own limit
+                (DEC-003-12, DEC-arch-13); streamed: a failure event (same exception for the cut) or
+                a stream ending before ``response.completed`` (DEC-003-13). A receiver failure
                 propagates unchanged (DEC-000-23).
         """
         settings = self._merge_options(options=options)
+        # DEC-003-17: the wire field is the merge's verdict on "the app set the output limit"
+        # (aliases, defaults and ``None`` clearing already applied).
+        output_limit_set = "max_output_tokens" in settings
         payload = self._build_responses_payload(messages, system=system, settings=settings, stream=stream)
 
         with self._tracer.trace("chat", self.model) as t:
@@ -1172,7 +1274,7 @@ class OpenAIAPIClient(LLMClient):
             if not stream:
                 reply = await self._request("POST", "/responses", json=payload)
                 # DEC-003-12: a failed / incomplete reply raises here, inside the session, so it is recorded.
-                result = _responses_reply_text(reply)
+                result = _responses_reply_text(reply, output_limit_set=output_limit_set)
                 t.log_response(result)
                 return result
 
@@ -1189,7 +1291,9 @@ class OpenAIAPIClient(LLMClient):
             # wrapper is installed only when tracing is enabled (DEC-000-48).
             async with self._stream_post("/responses", payload) as response:
                 result = await self._read_responses_stream(
-                    response, _tracing_delta if self._tracer.enabled else on_delta
+                    response,
+                    _tracing_delta if self._tracer.enabled else on_delta,
+                    output_limit_set=output_limit_set,
                 )
                 t.log_response(result)
                 return result
@@ -1207,6 +1311,9 @@ class OpenAIAPIClient(LLMClient):
 
         Sends the system item (when truthy) and one ``{"role": "user", "content": prompt}`` item
         (DEC-003-11); every argument is forwarded to ``chat`` unchanged.
+
+        A reply cut at the app's own output limit is returned as ``chat`` returns it; with no app
+        limit, or any other early end, it raises as ``chat`` does (DEC-arch-13, DEC-003-19).
 
         Returns:
             The answer text, as ``chat`` returns it.
@@ -1246,8 +1353,14 @@ class OpenAIAPIClient(LLMClient):
         ``response_schema`` the text is returned without any check. The schema is not sent
         (US-040, out of scope).
 
+        Output limit (DEC-arch-13, DEC-003-17..19): when the merged wire settings hold
+        ``max_output_tokens``, a reply cut for reason ``max_output_tokens`` yields its text as a
+        completed reply does; the JSON parse check above still applies to it. With no app limit, or
+        any other incomplete reason, it raises.
+
         Raises:
-            LLMError: Request failure; a failed / incomplete reply (DEC-003-12); or
+            LLMError: Request failure; a failed / incomplete reply other than a cut at the app's own
+                limit (DEC-003-12, DEC-arch-13); or
                 ``response_schema`` given and the reply is not valid JSON ("LLM response was not
                 valid JSON, despite requesting JSON mode.", parse error in the description).
         """
@@ -1256,6 +1369,8 @@ class OpenAIAPIClient(LLMClient):
         # ``response_format`` setting has already become ``text`` in ``settings`` and is kept.
         if "text" not in settings:
             settings["text"] = {"format": {"type": "json_object"}}
+        # DEC-003-17: computed from the wire settings, as in ``chat``.
+        output_limit_set = "max_output_tokens" in settings
         payload = self._build_responses_payload(messages, system=system, settings=settings, stream=False)
 
         with self._tracer.trace("chat_json", self.model) as t:
@@ -1264,7 +1379,7 @@ class OpenAIAPIClient(LLMClient):
             t.log_request("POST", "/responses", payload)
 
             reply = await self._request("POST", "/responses", json=payload)
-            response_content = _responses_reply_text(reply)
+            response_content = _responses_reply_text(reply, output_limit_set=output_limit_set)
             t.log_response(response_content)
 
         # DEC-002-7: the only check is the JSON parse; any valid JSON value passes unchanged.
@@ -1317,6 +1432,16 @@ class OpenAIAPIClient(LLMClient):
         The rest of the loop is the non-streamed one. The return is the final round's text only, with
         no reasoning and no markers.
 
+        A round cut at the app's own output limit (DEC-arch-13): when the wire settings hold
+        ``max_output_tokens`` (the app set ``max_tokens`` / ``context_length`` as a call option or a
+        default and did not clear it with ``None``), computed once per call and passed to every round's
+        reader / parser (DEC-004-15), a round cut for reason ``max_output_tokens`` is the answer when it
+        holds no tool call -- non-streamed: no ``function_call`` item (DEC-004-16); streamed: no call
+        started (DEC-004-17) -- and is returned and logged as a completed answer round, even on the last
+        allowed round. A cut round with calls raises ``LLMError`` with the server's reason and runs none
+        of them; tools of earlier rounds stay run (DEC-004-18). With no app limit, and for every other
+        early end, a cut round still raises.
+
         Returns:
             The final round's text.
 
@@ -1324,8 +1449,9 @@ class OpenAIAPIClient(LLMClient):
             ValueError: An advertised tool has no callable (before any request), or a call names an
                 argument the callable lacks.
             LLMError: A call names a tool not advertised or an empty name, its arguments are not a
-                JSON object, a tool result cannot be serialised, a round reply is failed / incomplete,
-                a streamed round reports a failure / error event or ends without completion, or a
+                JSON object, a tool result cannot be serialised, a round reply is failed / incomplete
+                (except a cut at the app's limit without tool calls, DEC-004-16 / DEC-004-17), a
+                streamed round reports a failure / error event or ends without completion, or a
                 request fails (non-2xx, transport).
             Exception: Streamed, whatever ``on_delta`` raises propagates unchanged (DEC-000-23).
             RuntimeError: A tool raised (naming the tool), or the round limit was reached without a
@@ -1344,6 +1470,9 @@ class OpenAIAPIClient(LLMClient):
         if response_format:
             settings["text"] = {"format": _responses_text_format(response_format)}
         flat_tools = _flatten_responses_tools(tools_definitions)
+        # DEC-004-15: the settings are fixed for the call, so one verdict serves every round; it is
+        # read after the merge so defaults, the alias and per-call ``None`` clearing all count.
+        output_limit_set = "max_output_tokens" in settings
 
         msgs: list[dict[str, Any]] = list(messages)
         if system:
@@ -1371,12 +1500,17 @@ class OpenAIAPIClient(LLMClient):
                     # (DEC-004-10). Everything after reading the round is shared with the
                     # non-streamed path (DEC-004-6, DEC-004-7, DEC-004-11).
                     async with self._stream_post("/responses", payload) as response:
-                        round_ = await self._read_responses_tool_stream(response, on_delta)
+                        round_ = await self._read_responses_tool_stream(
+                            response, on_delta, output_limit_set=output_limit_set
+                        )
                 else:
-                    round_ = _read_responses_tool_round(await self._request("POST", "/responses", json=payload))
+                    round_ = _read_responses_tool_round(
+                        await self._request("POST", "/responses", json=payload), output_limit_set=output_limit_set
+                    )
 
                 if not round_.tool_calls:
-                    # The final round's reasoning is never kept (DEC-004-7).
+                    # The final round's reasoning is never kept (DEC-004-7). A cut answer round lands
+                    # here too, before the round-limit check (DEC-004-18).
                     t.log_response(round_.text)
                     return round_.text
 

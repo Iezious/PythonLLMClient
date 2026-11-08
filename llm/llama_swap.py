@@ -82,11 +82,16 @@ def _responses_text_format(response_format: Any) -> Any:
     return response_format
 
 
-def _responses_reply_text(reply: Any) -> str:
+def _responses_reply_text(reply: Any, *, output_limit_set: bool = False) -> str:
     """Return the answer text of a non-streamed Responses reply, or raise for a failed one (DEC-003-12).
 
     Args:
         reply: The decoded body ``_request`` returned for ``POST /responses``.
+        output_limit_set: Keyword-only; ``True`` when the calling operation's wire settings hold
+            ``max_output_tokens`` (the app set the output limit, DEC-003-17 / DEC-003-20). With it on,
+            an ``incomplete`` reply whose ``incomplete_details.reason`` is exactly
+            ``"max_output_tokens"`` (DEC-003-18) is read as a completed reply and its text returned
+            (DEC-003-19, DEC-arch-13). Default ``False`` keeps the rule below unchanged.
 
     Returns:
         The ``text`` of every ``output_text`` content part of every ``message`` item in ``output``,
@@ -94,13 +99,22 @@ def _responses_reply_text(reply: Any) -> str:
         content with empty ``summary`` / ``encrypted_content``, as llama.cpp sends) and other part
         types are ignored. A missing or non-list ``output``, no message item, or a null/missing
         ``text`` contributes ``""``. Any status other than ``failed`` / ``incomplete`` (or none)
-        extracts the text.
+        extracts the text, and so does an ``incomplete`` reply cut at the app's own limit
+        (``output_limit_set`` on and reason exactly ``"max_output_tokens"``, DEC-003-19).
 
     Raises:
         LLMError: ``status == "failed"`` — description ``error.message`` when ``error`` is a mapping
-            with a string message, else ``error`` as JSON text; ``status == "incomplete"`` —
-            description ``incomplete_details.reason`` when present, else ``incomplete_details`` as
-            JSON text. A reply that is not a mapping surfaces as a generic error (accepted).
+            with a string message, else ``error`` as JSON text; ``status == "incomplete"`` other
+            than the cut at the app's limit above (flag off, any other or missing reason, missing
+            or null ``incomplete_details``) — description ``incomplete_details.reason`` when
+            present, else ``incomplete_details`` as JSON text. A reply that is not a mapping
+            surfaces as a generic error (accepted).
+
+    Note:
+        Accepted llama-swap gap (DEC-arch-13): llama.cpp reports a capped reply as ``completed``
+        with ``incomplete_details: null``, so such a reply already returns text through the
+        completed path, and a cut at a limit the app did not set cannot be told apart from a
+        complete reply and is returned as text too.
     """
     status = reply.get("status")
     if status == "failed":
@@ -112,11 +126,17 @@ def _responses_reply_text(reply: Any) -> str:
         raise LLMError("llama-swap Responses reply failed", description=reason)
     if status == "incomplete":
         details = reply.get("incomplete_details")
-        if isinstance(details, Mapping) and details.get("reason") is not None:
-            reason = str(details["reason"])
-        else:
-            reason = json.dumps(details, ensure_ascii=False, default=str)
-        raise LLMError("llama-swap Responses reply is incomplete", description=reason)
+        # A cut at the app's own limit reads like a completed reply (DEC-003-19); only the exact
+        # string reason counts (DEC-003-18), anything else stays an error below.
+        cut_at_app_limit = (
+            output_limit_set and isinstance(details, Mapping) and details.get("reason") == "max_output_tokens"
+        )
+        if not cut_at_app_limit:
+            if isinstance(details, Mapping) and details.get("reason") is not None:
+                reason = str(details["reason"])
+            else:
+                reason = json.dumps(details, ensure_ascii=False, default=str)
+            raise LLMError("llama-swap Responses reply is incomplete", description=reason)
 
     output = reply.get("output")
     if not isinstance(output, list):
@@ -195,7 +215,9 @@ def _responses_tools(tools_definitions: list[dict[str, Any]]) -> list[dict[str, 
     return flat
 
 
-def _responses_tool_round(reply: Any) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+def _responses_tool_round(
+    reply: Any, *, output_limit_set: bool = False
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """Read one non-streamed tool-round reply into round text, tool calls and carry items (DEC-004-8).
 
     The status is checked first exactly as ``_responses_reply_text`` does (DEC-003-12). Then
@@ -204,6 +226,14 @@ def _responses_tool_round(reply: Any) -> tuple[str, list[dict[str, Any]], list[d
 
     Args:
         reply: The decoded body ``_request`` returned for one ``POST /responses`` round.
+        output_limit_set: Keyword-only; ``True`` when the calling operation's wire settings hold
+            ``max_output_tokens`` (the app set the output limit, DEC-004-15). With it on, an
+            ``incomplete`` reply whose reason is exactly ``"max_output_tokens"`` (DEC-003-18) is the
+            answer — returned as ``(text, [], reasoning)`` — when it holds no ``function_call`` item,
+            and raises ``LLMError`` carrying the reason when it holds any (DEC-004-16,
+            DEC-arch-13). Default ``False``: every cut round raises, as before. llama-swap gap
+            (DEC-arch-13): the server reports a capped reply as completed, so a cut it does not
+            report is read as a complete round whoever set the limit.
 
     Returns:
         ``(text, calls, reasoning)``:
@@ -216,11 +246,15 @@ def _responses_tool_round(reply: Any) -> tuple[str, list[dict[str, Any]], list[d
         - ``reasoning`` — the reasoning items exactly as received, in output order (DEC-004-7).
 
     Raises:
-        LLMError: ``status`` ``failed`` / ``incomplete``, carrying the server's reason (DEC-003-12).
+        LLMError: ``status`` ``failed`` / ``incomplete``, carrying the server's reason (DEC-003-12),
+            except a cut at the app's own limit without ``function_call`` items (above); a cut at the
+            app's limit holding any ``function_call`` item raises with the same message and
+            description as any other incomplete reply (DEC-004-16), so no tool of the round runs.
     """
     # Reusing the chat path's reader gives exactly DEC-003-12: status first (failed / incomplete →
-    # LLMError with the server's reason), then the message items' output-text parts joined.
-    text = _responses_reply_text(reply)
+    # LLMError with the server's reason), then the message items' output-text parts joined. With the
+    # flag on it lets a cut at the app's limit through (DEC-003-18 match) and the calls decide below.
+    text = _responses_reply_text(reply, output_limit_set=output_limit_set)
     calls: list[dict[str, Any]] = []
     reasoning: list[dict[str, Any]] = []
     output = reply.get("output")
@@ -242,6 +276,11 @@ def _responses_tool_round(reply: Any) -> tuple[str, list[dict[str, Any]], list[d
         elif kind == "reasoning":
             # Kept as received (DEC-004-7); llama.cpp's empty summary / encrypted content included.
             reasoning.append(item)
+    # An incomplete reply got past the reader only as a matched cut at the app's limit (flag on,
+    # reason exactly "max_output_tokens"). Its calls' arguments may be truncated, so the round is
+    # refused with the reader's own incomplete error shape (DEC-004-16, DEC-arch-13).
+    if calls and reply.get("status") == "incomplete":
+        raise LLMError("llama-swap Responses reply is incomplete", description="max_output_tokens")
     return text, calls, reasoning
 
 
@@ -763,6 +802,8 @@ class LlamaSwapAPIClient(LLMClient):
         self,
         response: aiohttp.ClientResponse,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        output_limit_set: bool = False,
     ) -> str:
         """Read an open Responses event stream, deliver its pieces and return the full delivered text.
 
@@ -775,32 +816,49 @@ class LlamaSwapAPIClient(LLMClient):
         - ``response.reasoning_text.delta`` / ``response.reasoning_summary_text.delta`` → reasoning
           piece (``delta``); no separator between reasoning or summary parts.
         - ``response.completed`` → complete; returns at once, reads nothing further.
+        - ``response.incomplete`` cut at the app's own limit (``output_limit_set`` on and
+          ``response.incomplete_details.reason`` exactly ``"max_output_tokens"``) → complete, exactly
+          as ``response.completed`` (DEC-003-19, DEC-arch-13).
         - ``response.failed`` → ``LLMError`` described by ``response.error.message`` when a string,
-          else ``response.error`` as JSON text; ``response.incomplete`` → ``LLMError`` described by
-          ``response.incomplete_details.reason`` when present, else that value as JSON text;
+          else ``response.error`` as JSON text; any other ``response.incomplete`` (flag off, another
+          or non-string or missing reason, missing details) → ``LLMError`` described by
+          ``response.incomplete_details.reason`` when a non-empty string, else that value as JSON text;
           ``error`` → ``LLMError`` described by the event's ``message`` when a string, else the event
           as JSON text. No piece is delivered after a failure event.
         - Any other type is ignored. Empty or missing deltas deliver nothing.
 
         Markers per run of reasoning (DEC-000-20): the first reasoning piece after text (or at the
         start) is prefixed with ``<think>``; the first text piece after reasoning is prefixed with
-        ``</think>``; a block still open at ``response.completed`` is closed by delivering
-        ``</think>`` as its own piece. Each piece goes to ``on_delta`` as it is parsed (result awaited
-        only if awaitable, DEC-000-23) and is appended to the returned text.
+        ``</think>``; a block still open at ``response.completed`` (or at a matching
+        ``response.incomplete``) is closed by delivering ``</think>`` as its own piece. Each piece
+        goes to ``on_delta`` as it is parsed (result awaited only if awaitable, DEC-000-23) and is
+        appended to the returned text.
 
         Args:
             response: The open streamed response (from ``_stream_post``); only passed to
                 ``_iter_sse_data``.
             on_delta: Optional receiver of pieces; its failure propagates unchanged and ends the read.
+            output_limit_set: Keyword-only; ``True`` when the calling operation's wire settings hold
+                ``max_output_tokens`` (DEC-003-17). With it on, a ``response.incomplete`` event whose
+                ``response.incomplete_details.reason`` is exactly ``"max_output_tokens"``
+                (DEC-003-18) ends the stream as ``response.completed`` does (DEC-003-19,
+                DEC-arch-13). Default ``False`` keeps the rule above unchanged.
 
         Returns:
             The concatenation of every delivered piece, markers included (equals what the receiver
             got; the full text when there is no receiver).
 
         Raises:
-            LLMError: A failed, incomplete or error event (carrying the server's reason); the stream
-                ended without ``response.completed`` (also after ``[DONE]``), saying it ended before
-                the reply was complete (DEC-001-1); a reader failure (DEC-001-7).
+            LLMError: A failed event, an incomplete event other than the cut at the app's limit, or an
+                error event (carrying the server's reason); the stream ended without
+                ``response.completed`` or a matching ``response.incomplete`` (also after ``[DONE]``),
+                saying it ended before the reply was complete (DEC-001-1); a reader failure
+                (DEC-001-7).
+
+        Note:
+            Accepted llama-swap gap (DEC-arch-13): llama.cpp ends a capped stream with
+            ``response.completed`` and no incomplete details, so such a cut already returns text,
+            and a cut at a limit the app did not set is returned as text too.
         """
         text = ""
         # True while a <think> block has been opened and not yet closed (DEC-000-20, per run).
@@ -863,6 +921,12 @@ class LlamaSwapAPIClient(LLMClient):
                 body = event.get("response")
                 details = body.get("incomplete_details") if isinstance(body, dict) else None
                 reason = details.get("reason") if isinstance(details, dict) else None
+                if output_limit_set and reason == "max_output_tokens":
+                    # A cut at the app's own limit ends the stream as response.completed does
+                    # (DEC-003-19); only the exact string reason counts (DEC-003-18).
+                    if in_reasoning:
+                        await _deliver("</think>")
+                    return text
                 raise LLMError(
                     "llama-swap reported an incomplete response",
                     description=reason if isinstance(reason, str) and reason else json.dumps(details),
@@ -884,6 +948,8 @@ class LlamaSwapAPIClient(LLMClient):
         self,
         response: aiohttp.ClientResponse,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        output_limit_set: bool = False,
     ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
         """Read one streamed tool round's Responses events into round text, tool calls and carry items.
 
@@ -911,8 +977,12 @@ class LlamaSwapAPIClient(LLMClient):
         - ``response.output_item.done`` with a ``reasoning`` item → carry item, kept verbatim and
           recorded with its ``output_index`` (DEC-004-7).
         - ``response.completed`` → the round is complete; returns at once, reads nothing further.
-        - ``response.failed``, ``response.incomplete``, ``error`` → ``LLMError`` carrying the
-          server's reason, as in DEC-003-13. Every other type is ignored.
+        - ``response.incomplete`` with ``output_limit_set`` on and reason exactly
+          ``"max_output_tokens"`` → ends the round as ``response.completed`` does when no call has
+          started (an added ``function_call`` item, an arguments fragment or a done ``function_call``
+          item), else ``LLMError`` with no further piece (DEC-004-17).
+        - ``response.failed``, any other ``response.incomplete``, ``error`` → ``LLMError`` carrying
+          the server's reason, as in DEC-003-13. Every other type is ignored.
 
         Handles the llama.cpp sequence: created, in progress; reasoning item added at position 0 and
         reasoning deltas; function-call item added at position 1 with name, call id and empty
@@ -928,6 +998,16 @@ class LlamaSwapAPIClient(LLMClient):
                 ``_iter_sse_data``.
             on_delta: Optional receiver of text and reasoning pieces; its failure propagates
                 unchanged and ends the read (no later piece is delivered).
+            output_limit_set: Keyword-only; ``True`` when the calling operation's wire settings hold
+                ``max_output_tokens`` (DEC-004-15). With it on, a ``response.incomplete`` whose reason
+                is exactly ``"max_output_tokens"`` (DEC-003-18) ends the round as
+                ``response.completed`` does (open reasoning block closed by its own ``</think>``
+                piece, then return) when no tool call has started in the round; if any call has
+                started it raises ``LLMError`` carrying the reason and delivers no further piece, not
+                even a closing marker (DEC-004-17, DEC-arch-13). Default ``False``: every cut round
+                raises, as before. llama-swap gap (DEC-arch-13): the server reports a capped reply as
+                completed, so a cut it does not report is read as a complete round whoever set the
+                limit.
 
         Returns:
             A triple, same shape as ``_responses_tool_round``:
@@ -938,9 +1018,11 @@ class LlamaSwapAPIClient(LLMClient):
             in which they finished.
 
         Raises:
-            LLMError: A failed, incomplete or error event (carrying the server's reason); the stream
-                ended without ``response.completed`` (also after a ``[DONE]`` sentinel); a reader
-                failure from ``_iter_sse_data``.
+            LLMError: A failed or error event, or an incomplete event other than a cut at the app's
+                limit with no started call (carrying the server's reason; a cut at the app's limit
+                with a started call carries ``max_output_tokens``); the stream ended without
+                ``response.completed`` (also after a ``[DONE]`` sentinel); a reader failure from
+                ``_iter_sse_data``.
         """
         text = ""
         # True while a <think> block is open; fresh for every round so each round's reasoning is its
@@ -996,6 +1078,18 @@ class LlamaSwapAPIClient(LLMClient):
                 value = source.get(key)
                 if isinstance(value, str) and value:
                     call[key] = value
+
+        async def _end_round() -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+            """End the round as ``response.completed`` does: close an open reasoning block, return.
+
+            Shared by the completed event and a matched cut at the app's limit (DEC-004-17), so both
+            follow one rule for markers and the receiver. Delivers ``</think>`` when a block is open.
+            """
+            # Close an open block as its own piece so the next round's pieces never land inside it.
+            if in_reasoning:
+                await _deliver("</think>")
+            reasoning = [item for _, _, item in sorted(carry, key=lambda entry: (entry[0], entry[1]))]
+            return text, calls, reasoning
 
         async for data in self._iter_sse_data(response):
             # Non-JSON payloads (including a `[DONE]` sentinel), non-objects and objects without a
@@ -1075,12 +1169,8 @@ class LlamaSwapAPIClient(LLMClient):
                 if isinstance(arguments, str):
                     call["arguments"] = arguments
             elif kind == "response.completed":
-                # The round's only completion signal: close an open block as its own piece so the
-                # next round's pieces never land inside it, and return without reading further.
-                if in_reasoning:
-                    await _deliver("</think>")
-                reasoning = [item for _, _, item in sorted(carry, key=lambda entry: (entry[0], entry[1]))]
-                return text, calls, reasoning
+                # The round's completion signal: return without reading further.
+                return await _end_round()
             elif kind == "response.failed":
                 body = event.get("response")
                 error = body.get("error") if isinstance(body, dict) else None
@@ -1093,6 +1183,12 @@ class LlamaSwapAPIClient(LLMClient):
                 body = event.get("response")
                 details = body.get("incomplete_details") if isinstance(body, dict) else None
                 reason = details.get("reason") if isinstance(details, dict) else None
+                # A cut at the app's own limit (DEC-003-18 exact match) with no call started in this
+                # round is the answer: end like completed (DEC-004-17). Any entry in `calls` counts
+                # as started, since its arguments may be truncated; then the error below, and no
+                # closing marker is delivered first (DEC-003-13).
+                if output_limit_set and reason == "max_output_tokens" and not calls:
+                    return await _end_round()
                 raise LLMError(
                     "llama-swap reported an incomplete response",
                     description=reason if isinstance(reason, str) and reason else json.dumps(details),
@@ -1177,6 +1273,15 @@ class LlamaSwapAPIClient(LLMClient):
         when ``self._tracer.enabled`` (DEC-000-48); the parsed text is logged with ``log_response``
         and returned. Never calls ``/chat/completions``.
 
+        Output limit (DEC-arch-13, DEC-003-17..19): the app set the limit when the wire settings
+        hold ``max_output_tokens`` (``max_tokens`` or its ``context_length`` alias, as a call option
+        or a client default, not cleared with ``None``); that verdict is passed as
+        ``output_limit_set`` to the reader / parser. With it, a reply or ``response.incomplete``
+        event cut for reason exactly ``"max_output_tokens"`` is returned (and logged) like a
+        completed reply; without it, such a cut stays ``LLMError``. Accepted llama-swap gap:
+        llama.cpp reports a capped reply as completed, so a cut it does not report is returned as
+        text whoever set the limit.
+
         Args:
             messages: Conversation turns; never modified.
             system: Optional system instruction, sent as the first input item when truthy.
@@ -1190,11 +1295,14 @@ class LlamaSwapAPIClient(LLMClient):
 
         Raises:
             LLMError: Non-2xx reply (address, status, server reply; never the credential), an
-                unreachable server, or a ``failed`` / ``incomplete`` reply; streamed, also a failed /
-                incomplete / error event or a stream ending without ``response.completed``
-                (DEC-003-13); raised inside the trace session.
+                unreachable server, a ``failed`` reply, or an ``incomplete`` reply other than a cut
+                at the app's own limit; streamed, also a failed event, an incomplete event other
+                than that cut, an error event, or a stream ending without a completion event
+                (DEC-003-13, DEC-003-19); raised inside the trace session.
         """
         opt = self._merge_options(options=options)
+        # DEC-003-17: the wire field is the merge's verdict on whether the app set the limit.
+        output_limit_set = "max_output_tokens" in opt
         payload = self._responses_payload(messages, system=system, settings=opt, stream=stream)
 
         with self._tracer.trace("chat", self.model) as t:
@@ -1204,7 +1312,7 @@ class LlamaSwapAPIClient(LLMClient):
 
             if not stream:
                 reply = await self._request("POST", "/responses", json=payload)
-                result = _responses_reply_text(reply)
+                result = _responses_reply_text(reply, output_limit_set=output_limit_set)
                 t.log_response(result)
                 return result
 
@@ -1218,7 +1326,7 @@ class LlamaSwapAPIClient(LLMClient):
             # DEC-000-48: the receiver is wrapped only when tracing is on.
             receiver = _tracing_delta if self._tracer.enabled else on_delta
             async with self._stream_post("/responses", payload) as response:
-                result = await self._stream_responses_response(response, receiver)
+                result = await self._stream_responses_response(response, receiver, output_limit_set=output_limit_set)
             t.log_response(result)
             return result
 
@@ -1241,10 +1349,12 @@ class LlamaSwapAPIClient(LLMClient):
             on_delta: Receiver of streamed pieces (through ``chat``).
 
         Returns:
-            What ``chat`` returns.
+            What ``chat`` returns; a reply cut at the app's own output limit is returned as text,
+            streamed and not (DEC-arch-13, DEC-003-19, through ``chat``; the llama-swap gap of
+            ``chat`` applies).
 
         Raises:
-            LLMError: As ``chat``.
+            LLMError: As ``chat`` (a cut at the output limit the app did not set included).
         """
         messages: List[LLMMessage] = [{"role": "user", "content": prompt}]
         return await self.chat(
@@ -1273,6 +1383,13 @@ class LlamaSwapAPIClient(LLMClient):
         trace session, is that the text parses as JSON (DEC-000-37, DEC-002-7): any valid JSON value
         is returned unchanged; the schema is not sent and its fields are not checked.
 
+        Output limit (DEC-arch-13, DEC-003-17..19): ``output_limit_set`` is passed to the reader as
+        ``"max_output_tokens"`` in the wire settings, so a reply cut at the app's own limit (reason
+        exactly ``"max_output_tokens"``) yields its text like a completed reply; the parse check
+        then runs unchanged, so a cut answer that is not valid JSON fails as any invalid JSON does.
+        Accepted llama-swap gap: llama.cpp reports a capped reply as completed, so a cut it does
+        not report is returned as text whoever set the limit.
+
         Args:
             messages: Conversation turns; never modified.
             response_schema: When truthy, enables the JSON parse check.
@@ -1283,10 +1400,13 @@ class LlamaSwapAPIClient(LLMClient):
             The answer text (never ``None``).
 
         Raises:
-            LLMError: Request failure, a ``failed`` / ``incomplete`` reply, or the text is not valid
-                JSON while ``response_schema`` is given.
+            LLMError: Request failure, a ``failed`` reply, an ``incomplete`` reply other than a cut at
+                the app's own limit, or the text is not valid JSON while ``response_schema`` is given.
         """
         opt = self._merge_options(options=options)
+        # DEC-003-17: computed from the wire settings; the json_object text format added below
+        # does not touch max_output_tokens.
+        output_limit_set = "max_output_tokens" in opt
         # DEC-001-2 / DEC-003-10: the app's translated response_format wins; JSON object otherwise.
         if "text" not in opt:
             opt["text"] = {"format": {"type": "json_object"}}
@@ -1297,7 +1417,7 @@ class LlamaSwapAPIClient(LLMClient):
             t.log_messages(payload["input"])
             t.log_request("POST", "/responses", payload)
             reply = await self._request("POST", "/responses", json=payload)
-            content = _responses_reply_text(reply)
+            content = _responses_reply_text(reply, output_limit_set=output_limit_set)
             t.log_response(content)
 
         # DEC-000-37 / DEC-002-7: parse check only, after the trace session, schema not enforced.
@@ -1345,6 +1465,17 @@ class LlamaSwapAPIClient(LLMClient):
         holds a credential. ``stream=True`` opens each round with ``_stream_post`` and reads it with
         ``_stream_responses_tool_round`` (step 004), the receiver passed unwrapped.
 
+        Output limit (DEC-004-15..18, DEC-arch-13): whether the app set it is computed once per call
+        as "the merged wire settings hold ``max_output_tokens``" (call option or client default,
+        directly or through ``context_length``; absent when never set or cleared per call with
+        ``None``) and passed to the reader or parser of every round. A round reported as cut at that
+        limit with no tool call is an answer round — returned and logged as the call's response even
+        on the last allowed round; one holding (or, streamed, having started) a tool call ends the
+        call with ``LLMError`` and none of its tools runs; tools of earlier rounds stay run. With no
+        app limit every cut round is an error. Accepted llama-swap gap: the server reports a capped
+        reply as completed, so a cut it does not report is handled as a complete round whoever set
+        the limit.
+
         Args:
             messages: Conversation turns; never modified (tool-call / tool-result turns in it are
                 sent as function-call / function-call-output items).
@@ -1364,7 +1495,8 @@ class LlamaSwapAPIClient(LLMClient):
             ValueError: An advertised tool has no callable (before any request); an argument name the
                 callable lacks (tool not run).
             LLMError: Non-2xx reply (address and server reply) or transport failure; a ``failed`` /
-                ``incomplete`` round; a call naming an unoffered tool or with an empty / missing
+                ``incomplete`` round other than a cut at the app's own limit without a tool call; a
+                call naming an unoffered tool or with an empty / missing
                 name; arguments not JSON or not an object; an unserialisable result — each naming
                 the tool where there is one.
             RuntimeError: A tool raised (names the tool; no further request); the round limit was
@@ -1386,6 +1518,8 @@ class LlamaSwapAPIClient(LLMClient):
         if response_format:
             settings["text"] = {"format": _responses_text_format(response_format)}
         flat_tools = _responses_tools(tools_definitions)
+        # DEC-004-15: the merge's verdict on "the app set the output limit", fixed for the whole call.
+        output_limit_set = "max_output_tokens" in settings
 
         # Internal copy in chat-completions turn shapes (DEC-004-6); the caller's list is untouched.
         msgs: list[dict[str, Any]] = list(messages)
@@ -1408,10 +1542,12 @@ class LlamaSwapAPIClient(LLMClient):
                 if stream:
                     # Step 004 parser; the receiver is passed raw (no trace wrapper on the tool path).
                     async with self._stream_post("/responses", payload) as response:
-                        text, calls, reasoning = await self._stream_responses_tool_round(response, on_delta)
+                        text, calls, reasoning = await self._stream_responses_tool_round(
+                            response, on_delta, output_limit_set=output_limit_set
+                        )
                 else:
                     reply = await self._request("POST", "/responses", json=payload)
-                    text, calls, reasoning = _responses_tool_round(reply)
+                    text, calls, reasoning = _responses_tool_round(reply, output_limit_set=output_limit_set)
 
                 if not calls:
                     # The final round's reasoning is dropped here, never sent (DEC-004-7).

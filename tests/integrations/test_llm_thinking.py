@@ -38,7 +38,7 @@ async def test_llamaswap_thinking_streaming():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
     client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
@@ -76,7 +76,7 @@ async def test_llamaswap_thinking_tags_well_formed():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
     client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
@@ -112,7 +112,7 @@ async def test_llamaswap_thinking_streaming_with_tools():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_THINKING_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
     client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
@@ -176,14 +176,14 @@ async def test_llamaswap_thinking_streaming_with_tools():
 
 @pytest.mark.asyncio
 async def test_openai_o3mini_thinking_streaming():
-    """Test that enable_thinking translates to reasoning_effort for o3-mini."""
+    """Test that enable_thinking translates to reasoning_effort for the OpenAI reasoning model."""
     api_key = _openai_api_key()  # DoD-20
 
-    model = os.environ.get("OPENAI_THINKING_MODEL", "o3-mini")
+    model = os.environ.get("OPENAI_THINKING_MODEL", "gpt-6-luna")
 
     client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
 
-    messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37?"}]
+    messages: list[LLMMessage] = [{"role": "user", "content": "What is 15 * 37? Show the working steps."}]
     chunks = []
 
     async def on_delta(delta: str):
@@ -209,7 +209,7 @@ async def test_openai_o3mini_explicit_effort():
     """Test that explicit reasoning_effort overrides enable_thinking default."""
     api_key = _openai_api_key()  # DoD-20
 
-    model = os.environ.get("OPENAI_THINKING_MODEL", "o3-mini")
+    model = os.environ.get("OPENAI_THINKING_MODEL", "gpt-6-luna")
 
     client = OpenAIChatCompletionsClient(model=model, bearer_token=api_key)
 

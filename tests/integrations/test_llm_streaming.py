@@ -49,7 +49,7 @@ async def test_llamaswap_chat_streaming():
         or "http://india.loc:9292/v1"
     )
 
-    model = os.environ.get("LLAMA_SWAP_MODEL") or "Qwen3.5-27B-heretic-Q5_K_M"
+    model = os.environ.get("LLAMA_SWAP_MODEL") or "Qwen3.8-27B-Uncensored-FP8.i1-Q5_K_M"
 
     client = LlamaSwapChatCompletionsClient(model=model, base_url=base_url)
 
