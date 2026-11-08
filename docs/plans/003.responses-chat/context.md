@@ -40,7 +40,7 @@ Regression guards that must stay met on both protocols: US-006, US-007, US-008, 
 
 ## Decisions
 
-Planning-time decisions: `docs/decisions/003.responses-chat.md`, DEC-003-1 .. DEC-003-16. Steps cite them by id.
+Planning-time decisions: `docs/decisions/003.responses-chat.md`, DEC-003-1 .. DEC-003-16. Steps cite them by id. Amended 2026-11-08: DEC-003-11 (assistant items typed `message`) and DEC-003-14 (superseded by DEC-004-3, version stays 0.2.0).
 
 Still binding from earlier features: DEC-000-5 (merge algorithm), DEC-000-8 (generate is a one-message chat), DEC-000-11 (non-2xx error format), DEC-000-20 (think markers), DEC-000-23 (receiver inline, failures propagate), DEC-000-35 (separate copies), DEC-000-37 + DEC-002-7 (`chat_json` parse check), DEC-000-39 + DEC-001-16 (embedding request), DEC-000-48 (trace wrapper only when enabled), DEC-001-2, DEC-001-6, DEC-001-7, DEC-001-8, DEC-001-12, DEC-002-8, DEC-002-9, DEC-002-10.
 
@@ -83,7 +83,7 @@ Dependency waves: {001} → {002, 004} → {003, 005}. Step 001 must land first:
 
 ## Commands
 
-`uv run pytest` (unit + live), `uv run pytest tests/ --ignore=tests/integrations` (unit only), `uv run ruff check llm/`, `uv run ruff format llm/`, `uv lock` (after the version bump).
+`uv run pytest` (unit + live), `uv run pytest tests/ --ignore=tests/integrations` (unit only), `uv run ruff check llm/`, `uv run ruff format llm/`, `uv lock` (after any change to the project version).
 
 ## Vocabulary
 

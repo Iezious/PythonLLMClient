@@ -16,7 +16,7 @@ OpenAI and llama-swap are each offered over two wire protocols, one class per pr
 
 - **Responses** (`/responses`) — `OpenAIAPIClient`, `LlamaSwapAPIClient`. This is the default.
 - **Chat Completions** (`/chat/completions`) — `OpenAIChatCompletionsClient`, `LlamaSwapChatCompletionsClient`.
-  These keep the behaviour the library had before 0.3.0 under the new names.
+  These keep the behaviour the library had before the protocol split under the new names.
 
 The two classes of a backend are independent (neither subclasses the other) and share the same constructor,
 methods and settings keys. A class never switches protocol on its own, and the address never decides the protocol.

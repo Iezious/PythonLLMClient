@@ -2,7 +2,7 @@
 
 Feature 001.core-fixes, step 001: pydantic is a declared runtime dependency (DoD-1 of that step).
 Feature 003.responses-chat, step 001: the chat-completions classes and the ignored-setting warning
-category are exported (DoD-1, DoD-2) and the package version is 0.3.0, identical in
+category are exported (DoD-1, DoD-2) and the package version is 0.2.0, identical in
 ``pyproject.toml`` and ``llm.__version__`` (DoD-10).
 """
 
@@ -27,8 +27,8 @@ from llm import (
 # repository root (this file lives in ``tests/``, one level below it).
 _PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
-# Expected version fixed by the spec (DEC-003-14).
-_EXPECTED_VERSION = "0.3.0"
+# Expected version fixed by the spec (DEC-004-3, superseding DEC-003-14).
+_EXPECTED_VERSION = "0.2.0"
 
 
 def _project_table() -> dict:
@@ -50,13 +50,13 @@ def test_pydantic_is_a_runtime_dependency__DoD1():
     assert "pydantic" in names
 
 
-def test_pyproject_version_is_0_3_0__DoD10():
-    """DoD-10: the version declared in ``pyproject.toml`` is 0.3.0."""
+def test_pyproject_version_is_0_2_0__DoD10():
+    """DoD-10: the version declared in ``pyproject.toml`` is 0.2.0."""
     assert _project_table()["version"] == _EXPECTED_VERSION
 
 
-def test_package_version_is_0_3_0__DoD10():
-    """DoD-10: ``llm.__version__`` is 0.3.0."""
+def test_package_version_is_0_2_0__DoD10():
+    """DoD-10: ``llm.__version__`` is 0.2.0."""
     assert llm.__version__ == _EXPECTED_VERSION
 
 

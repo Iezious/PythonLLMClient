@@ -267,24 +267,72 @@ async def test_llamaswap_chat_sends_one_responses_request_with_exact_keys__DoD1(
     assert body["include"] == _INCLUDE
 
 
+# A conversation with every caller role, and the input items DoD-2 (DEC-003-11 as amended 2026-11-08)
+# requires for it behind a head system item: system / user bare role/content, assistant typed ``message``.
+_MIXED_MESSAGES: list[dict[str, Any]] = [
+    {"role": "system", "content": "Caller system"},
+    {"role": "user", "content": "First"},
+    {"role": "assistant", "content": "Second"},
+    {"role": "user", "content": "Third"},
+]
+_MIXED_ITEMS_WITH_HEAD: list[dict[str, Any]] = [
+    {"role": "system", "content": "Be brief."},
+    {"role": "system", "content": "Caller system"},
+    {"role": "user", "content": "First"},
+    {"type": "message", "role": "assistant", "content": "Second"},
+    {"role": "user", "content": "Third"},
+]
+
+
 @pytest.mark.asyncio
 async def test_llamaswap_chat_messages_become_items_with_system_first__DoD2(monkeypatch):
-    """DoD-2: each message becomes a role/content item in order, a truthy system is a head system item."""
-    messages = [
-        {"role": "user", "content": "First"},
-        {"role": "assistant", "content": "Second"},
-        {"role": "user", "content": "Third"},
-    ]
+    """DoD-2: messages become items in order behind a bare head system item; assistant typed, others bare."""
+    messages = copy.deepcopy(_MIXED_MESSAGES)
     original = copy.deepcopy(messages)
 
     body = await _chat_body(monkeypatch, messages=messages, system="Be brief.")
 
-    assert body["input"] == [
-        {"role": "system", "content": "Be brief."},
-        {"role": "user", "content": "First"},
-        {"role": "assistant", "content": "Second"},
-        {"role": "user", "content": "Third"},
+    assert body["input"] == _MIXED_ITEMS_WITH_HEAD
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_llamaswap_chat_item_key_sets_per_role__DoD2(monkeypatch):
+    """DoD-2: the assistant item has exactly type/role/content; system, user and head system items are bare."""
+    messages = [
+        {"role": "system", "content": "S", "name": "sys"},
+        {"role": "user", "content": "U", "name": "bob"},
+        {"role": "assistant", "content": "A", "name": "helper"},
     ]
+    original = copy.deepcopy(messages)
+
+    body = await _chat_body(monkeypatch, messages=messages, system="Head")
+
+    items = body["input"]
+    assert len(items) == 4
+    assert items[0] == {"role": "system", "content": "Head"}
+    assert set(items[0]) == {"role", "content"}
+    assert items[1] == {"role": "system", "content": "S"}
+    assert set(items[1]) == {"role", "content"}
+    assert items[2] == {"role": "user", "content": "U"}
+    assert set(items[2]) == {"role", "content"}
+    assert items[3] == {"type": "message", "role": "assistant", "content": "A"}
+    assert set(items[3]) == {"type", "role", "content"}
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_llamaswap_chat_json_builds_the_same_input_items__DoD2(monkeypatch):
+    """DoD-2: chat_json builds the same input items as chat (typed assistant, bare system / user / head)."""
+    messages = copy.deepcopy(_MIXED_MESSAGES)
+    original = copy.deepcopy(messages)
+    client = _client()
+    captured = _fake_request(monkeypatch, client, [_text_reply('{"a": 1}')])
+
+    await client.chat_json(messages, system="Be brief.")
+
+    assert len(captured) == 1
+    assert captured[0]["json"]["input"] == _MIXED_ITEMS_WITH_HEAD
     assert messages == original
 
 
@@ -303,7 +351,7 @@ async def test_llamaswap_chat_empty_system_adds_no_item__DoD2(monkeypatch, syste
 
 @pytest.mark.asyncio
 async def test_llamaswap_chat_items_carry_only_role_and_content__DoD2(monkeypatch):
-    """DoD-2: an input item holds only the role and content keys, values as given (DEC-003-11)."""
+    """DoD-2: a user input item holds only the role and content keys, values as given (DEC-003-11)."""
     messages = [{"role": "user", "content": "Hi", "name": "bob"}]
     original = copy.deepcopy(messages)
 

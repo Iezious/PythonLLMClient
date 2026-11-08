@@ -7,7 +7,7 @@ The package: base client with shared HTTP/SSE/option-merge plumbing, backend cli
 ## Glossary
 
 **Files:**
-- `__init__.py` — public exports (both protocol class pairs, `LLMSettingIgnoredWarning`) and `__version__` 0.3.0 (kept in step with `pyproject.toml`).
+- `__init__.py` — public exports (both protocol class pairs, `LLMSettingIgnoredWarning`) and `__version__` 0.2.0 (kept in step with `pyproject.toml`).
 - `exceptions.py` — `LLMError`, raised for non-2xx responses, transport failures, in-stream error frames, early stream end and other client-side errors; `LLMSettingIgnoredWarning`, the `UserWarning` subclass emitted for a setting the Responses clients accept but cannot apply.
 - `message.py` — `LLMMessage` TypedDict for one conversation message.
 - `options.py` — typed option dicts (`BaseLLMOptions`, `OllamaOptions`, `OpenAIOptions`).

@@ -36,10 +36,10 @@
 - DEC-003-8 — Factory protocol argument: last keyword, None means not passed
 - DEC-003-9 — Responses settings table and wire mapping
 - DEC-003-10 — Response format is translated to the Responses text format
-- DEC-003-11 — Responses request body: exact keys and input items
+- DEC-003-11 — Responses request body: exact keys and input items (amended 2026-11-08: assistant items typed `message`)
 - DEC-003-12 — Non-streamed Responses reply: text extraction and failed or incomplete status
 - DEC-003-13 — Responses stream handling: events, completion, markers and failures
-- DEC-003-14 — Package version is 0.3.0 in both declarations
+- DEC-003-14 — Package version is 0.3.0 in both declarations (superseded by DEC-004-3, 2026-11-08: version stays 0.2.0)
 - DEC-003-15 — Live tests: models and environment variables
 - DEC-003-16 — Test seams for the Responses classes
 

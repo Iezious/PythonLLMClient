@@ -175,11 +175,23 @@
 ### Step 005 — llama-swap Responses class: streamed chat
 - `llm/llama_swap.py` — `_stream_responses_response` filled per DEC-003-13 (typed-event dispatch, per-run `<think>`/`</think>` markers, closing piece at `response.completed`, failed/incomplete/error events and missing completion → `LLMError`); streamed `chat` wiring from step 004 kept unchanged; module header mentions step 005
 
+### 2026-11-08 correction — code
+- `llm/openai.py` — `_build_responses_payload`: assistant turns sent as `{"type": "message", "role": "assistant", "content"}`, system/user and head system items stay bare (DEC-003-11 amended); docstring + why-comment updated
+- `llm/llama_swap.py` — `_responses_payload`: same typed assistant item rule, own copy (DEC-arch-2); docstring + why-comment updated
+- `llm/__init__.py` — `__version__` back to 0.2.0 (DEC-004-3)
+- `pyproject.toml` — version back to 0.2.0 (DEC-004-3)
+- `uv.lock` — refreshed (`llm-client` 0.3.0 -> 0.2.0)
+- `README.md` — the one "0.3.0" mention changed to 0.2.0
+
 ## Notes & Issues
 
 - Step 001: README describes the feature's end state (Responses classes speak `/responses`, refuse `chat_with_tools`, emit `LLMSettingIgnoredWarning`); until steps 002/004 land, `OpenAIAPIClient`/`LlamaSwapAPIClient` still behave as chat completions.
 - Step 001: `llm/exceptions.py` needed no change (skeleton's `LLMSettingIgnoredWarning` is complete).
 - Step 002: streamed `chat` already opens `_stream_post("/responses", payload)` and calls `_read_responses_stream` (still the step-003 stub, so `stream=True` raises `NotImplementedError` until step 003); step 003 needs only the parser body.
+- 2026-11-08 — plan correction after delivery (user decisions via the orchestrator; plan side only, code and tests not yet changed):
+  - Typed assistant items: llama.cpp's Responses route refuses an assistant input item without `"type": "message"` (400 "Cannot determine type of 'item'"; probe in `docs/plans/004.responses-tools/context.md`). DEC-003-11 amended: caller assistant turns are sent as `{"type": "message", "role": "assistant", "content": …}`, system and user turns stay bare `{"role", "content"}`, in both Responses classes and every operation that builds input items (`chat` streamed and not, `chat_json`). Reworded in place: step 002 DoD-2 and Interface intent (payload builder), step 004 DoD-2 and Interface intent (payload builder). Steps 003 / 005 need no change (their DoD-1 compares against the non-streamed body).
+  - Version: DEC-003-14 (bump to 0.3.0) superseded by DEC-004-3 — no release till the end of the roadmap; `pyproject.toml`, `llm/__init__.py` and `uv.lock` go back to 0.2.0. Reworded in place: step 001 Goal, Interface intent (package exports, project metadata) and DoD-10; `001.context.md` version and test-expectation lines; `context.md` Commands line.
+  - Code / test work still to do (out of this plan's air gap, for the orchestrator to route): `llm/openai.py` and `llm/llama_swap.py` payload builders; `pyproject.toml`, `llm/__init__.py`, `uv.lock` back to 0.2.0; tests covering step 001 DoD-10 (`tests/test_package_surface.py`) and steps 002 / 004 DoD-2 (`tests/test_openai_responses_request.py`, `tests/test_llamaswap_responses_request.py`) to the amended clauses. The `## Skeleton`, `## Tests` and `## Files Changed` records above describe the delivery as built and are not rewritten.
 
 ## Ultra phase
 
@@ -201,3 +213,34 @@
 - glossary: done — llm/, tests/, tests/integrations/ catalogues
 - stale out-of-marker text for /finalize: tests/integrations/AGENTS.md Conventions (model env vars + defaults per DEC-003-15; "library reads key" remark stale after DEC-001-5); root AGENTS.md Repository Structure lacks the two *_chat_completions.py modules / protocol split / LLMSettingIgnoredWarning, credential "known defect" stale; llm/AGENTS.md Conventions (inline session.post bullet superseded by DEC-arch-5 `_stream_post`, Adding-a-backend lacks `protocol`, credential defect sentence); tests/AGENTS.md os.environ count (only test_llm_options.py, which still builds OpenAIAPIClient); docs/architecture/interfaces.md protocol axis + warnings sections still "(planned)"
 - commit: feature 003 delivered
+- 2026-11-08 correction: tests/AGENTS.md catalogue says test_package_surface.py checks 'version 0.3.0' and llm/AGENTS.md says __version__ 0.3.0 — refresh in the correction's glossary pass
+
+### 2026-11-08 correction — tests
+
+## Tests
+
+### Step 001 — tests amendment, DoD-10 (2026-11-08)
+- `tests/test_package_surface.py` — covers DoD-10 — expected version rebound from `0.3.0` to `0.2.0` (DEC-004-3, superseding DEC-003-14): `_EXPECTED_VERSION = "0.2.0"`; `test_pyproject_version_is_0_3_0__DoD10` renamed to `test_pyproject_version_is_0_2_0__DoD10`, `test_package_version_is_0_3_0__DoD10` renamed to `test_package_version_is_0_2_0__DoD10` (docstrings updated); module docstring version updated. `test_package_version_matches_pyproject__DoD10` is unchanged. No other test in the file was touched.
+- Coverage: DoD-10 ✓ (amended); all other DoD items unchanged from the original Step 001 tests entry.
+
+## Notes & Issues
+- 2026-11-08 — `tests/AGENTS.md` still describes `test_package_surface.py` as checking "version 0.3.0". That file was outside my write set, so I left it; whoever owns the docs should change it to 0.2.0.
+
+## Tests
+
+### Step 002 — tests, DoD-2 amendment (2026-11-08)
+- `tests/test_openai_responses_request.py` — covers DoD-2 (amended DEC-003-11) — `test_openai_chat_messages_become_input_items_in_order__DoD2` and `test_openai_chat_system_instruction_heads_input__DoD2` now expect assistant turns as `{"type": "message", "role": "assistant", "content": …}`; new `test_openai_chat_items_typed_only_for_assistant__DoD2` (chat) and `test_openai_chat_json_builds_same_items__DoD2` (chat_json) send a caller system / user / assistant / user conversation with a head system instruction and assert the exact item list, exact key sets (assistant: type/role/content; system, user, head system: role/content only) and the caller's list unchanged.
+- No other test changed.
+- Coverage: DoD-1 ✓, DoD-2 ✓ (amended), DoD-3 ✓, DoD-4 ✓, DoD-5 ✓, DoD-6 ✓, DoD-7 ✓, DoD-8 ✓, DoD-9 ✓, DoD-10 ✓, DoD-11 ✓, DoD-12 ✓, DoD-13 ✓, DoD-14 ✓, DoD-15 ✓, DoD-16 ✓, DoD-17 ✓, DoD-18 ✓
+
+#### Notes
+- The chat_json test passes `system=` as a keyword (the frozen `chat_json` signature is recorded as unchanged; DEC-003-11 names chat_json among the item-building operations). If the verifier reports a binding error on `system`, that is a TEST fault to route back.
+- Not run; ruff not run (no command execution in this role).
+
+## Tests
+
+### Step 004 — tests, DoD-2 amendment (2026-11-08)
+- `tests/test_llamaswap_responses_request.py` — covers DoD-2 (amended DEC-003-11) — `test_llamaswap_chat_messages_become_items_with_system_first__DoD2` now expects the caller assistant turn as `{"type": "message", "role": "assistant", "content": …}` and system / user / head system items bare; new `test_llamaswap_chat_item_key_sets_per_role__DoD2` pins exact key sets per role (extra caller keys dropped; assistant exactly type/role/content); new `test_llamaswap_chat_json_builds_the_same_input_items__DoD2` asserts `chat_json` sends the same items. Other tests unchanged (one docstring narrowed to "a user input item").
+- Coverage: DoD-1 ✓, DoD-2 ✓ (amended), DoD-3 ✓, DoD-4 ✓, DoD-5 ✓, DoD-6 ✓, DoD-7 ✓, DoD-8 ✓, DoD-9 ✓, DoD-10 ✓, DoD-11 ✓, DoD-12 ✓, DoD-13 ✓, DoD-14 ✓, DoD-15 ✓, DoD-16 ✓, DoD-17 ✓, DoD-18 ✓
+- 2026-11-08 correction: README line 19 finally reads "…before the protocol split under the new names" (supersedes the 0.2.0 wording noted in Files Changed)
+- 2026-11-08 correction verify: PASS (unit 878; live 62/66, 4 known env; live probe llama-swap [user, assistant, user] OK). Glossary: llm/AGENTS.md + tests/AGENTS.md version lines → 0.2.0. Advisory: no live OpenAI test sends an assistant turn over Responses.

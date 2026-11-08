@@ -296,7 +296,8 @@ async def test_openai_chat_without_settings_sends_fixed_body__DoD1(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_chat_messages_become_input_items_in_order__DoD2(monkeypatch):
-    """DoD-2: each caller message is a role/content input item, in order, without a system instruction."""
+    """DoD-2: each caller message is one input item, in order, without a system instruction: user turns bare
+    role/content, assistant turns typed ``message`` (DEC-003-11 as amended 2026-11-08)."""
     messages = [
         {"role": "user", "content": "First question"},
         {"role": "assistant", "content": "First answer"},
@@ -309,14 +310,15 @@ async def test_openai_chat_messages_become_input_items_in_order__DoD2(monkeypatc
 
     assert _only_body(records)["input"] == [
         {"role": "user", "content": "First question"},
-        {"role": "assistant", "content": "First answer"},
+        {"type": "message", "role": "assistant", "content": "First answer"},
         {"role": "user", "content": "Second question"},
     ]
 
 
 @pytest.mark.asyncio
 async def test_openai_chat_system_instruction_heads_input__DoD2(monkeypatch):
-    """DoD-2: a truthy system instruction is a system-role item at the head, and the caller's list is unchanged."""
+    """DoD-2: a truthy system instruction is a bare system-role item at the head, the assistant turn is typed
+    ``message``, and the caller's list is unchanged."""
     messages = [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}]
     snapshot = copy.deepcopy(messages)
     client = _client()
@@ -327,8 +329,69 @@ async def test_openai_chat_system_instruction_heads_input__DoD2(monkeypatch):
     assert _only_body(records)["input"] == [
         {"role": "system", "content": "Be terse."},
         {"role": "user", "content": "Question"},
-        {"role": "assistant", "content": "Answer"},
+        {"type": "message", "role": "assistant", "content": "Answer"},
     ]
+    assert messages == snapshot
+
+
+# A conversation with every caller role, so the per-role item rule of DEC-003-11 (amended 2026-11-08) is
+# pinned in one place: system and user bare, assistant typed ``message``.
+_MIXED_MESSAGES = [
+    {"role": "system", "content": "Caller system turn."},
+    {"role": "user", "content": "Ask one."},
+    {"role": "assistant", "content": "Reply one."},
+    {"role": "user", "content": "Ask two."},
+]
+_MIXED_ITEMS_WITH_HEAD = [
+    {"role": "system", "content": "Head instruction."},
+    {"role": "system", "content": "Caller system turn."},
+    {"role": "user", "content": "Ask one."},
+    {"type": "message", "role": "assistant", "content": "Reply one."},
+    {"role": "user", "content": "Ask two."},
+]
+
+
+def _assert_item_key_sets(items: list[dict]) -> None:
+    """Assistant items carry exactly type/role/content; every other item exactly role/content (DoD-2)."""
+    for item in items:
+        if item.get("role") == "assistant":
+            assert set(item) == {"type", "role", "content"}, item
+            assert item["type"] == "message"
+        else:
+            assert set(item) == {"role", "content"}, item
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_items_typed_only_for_assistant__DoD2(monkeypatch):
+    """DoD-2: on chat, caller system and user turns and the head system item are bare role/content items, the
+    assistant turn is a ``message`` item with exactly type, role and content; the caller's list is unchanged."""
+    messages = copy.deepcopy(_MIXED_MESSAGES)
+    snapshot = copy.deepcopy(messages)
+    client = _client()
+    records = _capture_requests(monkeypatch, client, [_text_reply()])
+
+    await client.chat(messages, system="Head instruction.")
+
+    items = _only_body(records)["input"]
+    assert items == _MIXED_ITEMS_WITH_HEAD
+    _assert_item_key_sets(items)
+    assert messages == snapshot
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_json_builds_same_items__DoD2(monkeypatch):
+    """DoD-2: chat_json builds the same input items as chat (bare system/user and head system item, typed
+    assistant with exactly three keys); the caller's list is unchanged."""
+    messages = copy.deepcopy(_MIXED_MESSAGES)
+    snapshot = copy.deepcopy(messages)
+    client = _client()
+    records = _capture_requests(monkeypatch, client, [_text_reply('{"a": 1}')])
+
+    await client.chat_json(messages, system="Head instruction.")
+
+    items = _only_body(records)["input"]
+    assert items == _MIXED_ITEMS_WITH_HEAD
+    _assert_item_key_sets(items)
     assert messages == snapshot
 
 

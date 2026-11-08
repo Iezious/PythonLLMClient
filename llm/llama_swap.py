@@ -410,11 +410,21 @@ class LlamaSwapAPIClient(LLMClient):
             stream: Value of the always-present ``stream`` key.
 
         Returns:
-            A new body holding exactly ``model``, ``input`` (one ``{"role", "content"}`` item per
-            message, values as given, in order; no other message keys), ``stream``, ``store: False``,
+            A new body holding exactly ``model``, ``input`` (one item per message, values as given,
+            in order: ``{"type": "message", "role": "assistant", "content"}`` for an assistant
+            message, ``{"role", "content"}`` for any other; no other message keys), ``stream``,
+            ``store: False``,
             ``include: ["reasoning.encrypted_content"]``, plus ``settings``. No ``instructions``.
         """
-        items: list[dict[str, Any]] = [{"role": m["role"], "content": m["content"]} for m in messages]
+        # DEC-003-11 (amended 2026-11-08): llama.cpp refuses an untyped assistant item with 400
+        # "Cannot determine type of 'item'", so assistant turns are typed message items; system and
+        # user items stay bare role/content. No other message keys are copied.
+        items: list[dict[str, Any]] = [
+            {"type": "message", "role": "assistant", "content": m["content"]}
+            if m["role"] == "assistant"
+            else {"role": m["role"], "content": m["content"]}
+            for m in messages
+        ]
         if system:
             items.insert(0, {"role": "system", "content": system})
         # Fixed keys first; settings come from _merge_options and never contain these names.

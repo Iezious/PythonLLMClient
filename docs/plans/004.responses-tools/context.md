@@ -22,9 +22,7 @@ After 003, each Responses class (`llm/openai.py`, `llm/llama_swap.py`) holds its
 
 `chat_with_tools` raises `NotImplementedError` (DEC-003-4). Today's tool loop, with 002's fixes, lives only in the frozen chat-completions copies `llm/openai_chat_completions.py` and `llm/llama_swap_chat_completions.py` (DEC-003-7). It is the reference for the loop's order and failure rules. It may be read and copied, never imported from and never edited.
 
-**Upstream dependency: 003's message items must be corrected first.** DEC-003-11 currently sends bare `{role, content}` items, and llama.cpp refuses an assistant item without `"type": "message"` (probe). The user chose to fix 003's plan before 003 is built. 004 assumes caller messages come out of 003's payload builder as items the server accepts, with assistant turns typed `message`. 004's own round items always carry their `type` (DEC-004-4). If the built 003 builder still sends untyped assistant items, that is an escape-valve stop, not a 004 fix.
-
-**Known upstream conflict: version.** DEC-003-14 bumps to 0.3.0. The user decided that no version changes before the end of the roadmap, so the version stays 0.2.0 and 004 bumps nothing (DEC-004-3). Correcting 003 is outside this plan.
+**Upstream corrections in 003 (2026-11-08).** Both conflicts this plan found in 003 are corrected there: DEC-003-11 is amended so 003's payload builder sends caller assistant turns as `{"type": "message", "role": "assistant", "content": …}` (system and user turns stay bare), and DEC-003-14 is superseded by DEC-004-3, so the version is back to 0.2.0. 004's own round items always carry their `type` (DEC-004-4); 004 bumps nothing.
 
 ## Stories this feature meets (DoD raw material)
 
@@ -53,7 +51,7 @@ After 003, each Responses class (`llm/openai.py`, `llm/llama_swap.py`) holds its
 
 Planning-time decisions: `docs/decisions/004.responses-tools.md`, DEC-004-1 .. DEC-004-14. Steps cite them by id.
 
-Still binding from earlier features: DEC-003-6, -9, -10, -11 (as corrected, see above), -12, -13, -15, -16; DEC-002-1..-5; DEC-001-8, DEC-001-15; DEC-000-20, -22, -23, -26, -30, -33, -48.
+Still binding from earlier features: DEC-003-6, -9, -10, -11 (as amended 2026-11-08, see above), -12, -13, -15, -16; DEC-002-1..-5; DEC-001-8, DEC-001-15; DEC-000-20, -22, -23, -26, -30, -33, -48.
 
 ## Files touched across steps
 

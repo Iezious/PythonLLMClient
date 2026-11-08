@@ -424,8 +424,9 @@ class OpenAIAPIClient(LLMClient):
         ``include: ["reasoning.encrypted_content"]`` (DEC-arch-7); plus every key of ``settings``.
         No ``instructions`` field. ``input`` is a new list: a truthy ``system`` becomes
         ``{"role": "system", "content": system}`` at its head (an empty one adds nothing), then each
-        caller message becomes ``{"role": ..., "content": ...}`` -- only those two keys, values as
-        given, in order.
+        caller message becomes one item, values as given, in order: an ``assistant`` message becomes
+        ``{"type": "message", "role": "assistant", "content": ...}`` -- exactly those three keys; any
+        other message (system, user) becomes ``{"role": ..., "content": ...}`` -- only those two keys.
 
         Args:
             messages: The caller's messages; neither the list nor its items are modified.
@@ -440,7 +441,14 @@ class OpenAIAPIClient(LLMClient):
         if system:
             items.append({"role": "system", "content": system})
         # Only role and content are copied: Responses rejects unknown item fields (DEC-003-11).
-        items.extend({"role": m["role"], "content": m["content"]} for m in messages)
+        # Assistant turns carry "type": "message" because llama.cpp's Responses route refuses an
+        # untyped assistant item (400 "Cannot determine type of 'item'"); system and user items stay
+        # bare (DEC-003-11 as amended 2026-11-08).
+        for m in messages:
+            if m["role"] == "assistant":
+                items.append({"type": "message", "role": "assistant", "content": m["content"]})
+            else:
+                items.append({"role": m["role"], "content": m["content"]})
         return {
             "model": self.model,
             "input": items,

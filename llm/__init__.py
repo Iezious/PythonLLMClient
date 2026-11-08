@@ -1,6 +1,6 @@
 """LLM client module for handling interactions with different language model APIs."""
 
-__version__ = "0.3.0"
+__version__ = "0.2.0"
 
 from .exceptions import LLMError, LLMSettingIgnoredWarning
 from .llm_client import LLMClient
