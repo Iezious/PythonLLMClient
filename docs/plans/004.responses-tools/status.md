@@ -6,6 +6,8 @@
 | 002  | `002.openai-responses-tools-stream.md`   | done    | PASS     | 2026-11-08 |
 | 003  | `003.llamaswap-responses-tools.md`       | done    | PASS     | 2026-11-08 |
 | 004  | `004.llamaswap-responses-tools-stream.md`| done    | PASS     | 2026-11-08 |
+| 005  | `005.openai-tools-output-limit-cut.md` | done    | PASS     | 2026-11-08 |
+| 006  | `006.llamaswap-tools-output-limit-cut.md` | done    | PASS     | 2026-11-08 |
 
 ## Skeleton
 
@@ -145,3 +147,79 @@ _populated by the coder when worth saying_
 - advisory for /finalize: `ruff format` would rewrap tests/test_openai_responses_tools.py, tests/test_openai_responses_tools_stream.py, tests/test_llamaswap_responses_tools.py (format command is scoped to llm/); copy differences allowed by DEC-arch-2 (flat tool defs copied vs passed; non-mapping args json.dumps vs str; backend-specific error texts; llama-swap records empty carry lists); stale lines from 003 correction: DEC-004-4 "before 003 is built", 004 context.md "None of 001, 002 or 003 is built yet"
 - note: working tree also holds another session's 005 planning (docs/decisions/005.responses-live-tests.md, docs/plans/005.responses-live-tests/, docs/decisions/index.md DEC-005 rows, Conventions lines in tests/AGENTS.md + tests/integrations/AGENTS.md) — excluded from the 004 commit
 - glossary: done — llm/, tests/, tests/integrations/ catalogues (inside markers only); out-of-marker staleness listed for /finalize: llm/AGENTS.md Conventions (inline session.post rule, _tools_stream_request seam now chat-completions only, reasoning-in-tool-content wording), tests/AGENTS.md Conventions seam rule, DEC-003-4 still accepted in index, root AGENTS.md Repository Structure
+
+## Ultra phase — extension 005–006 (DEC-arch-13)
+
+- orient: done 2026-11-08 — remaining steps 005, 006 only (001–004 delivered above) · dependencies 003/006 and 003/007 done PASS · typecheck: isolated (compileall + import + ruff) · pairable: 2
+- mode: serial — tree not clean (commit or stash to allow worktree mode) · profile: light (Python, single package, .venv)
+- waves: W1 005, 006 (disjoint source files; changed symbols are file-private helpers with a defaulted keyword)
+- harvest: done — docs/.cache/ultra/003.responses-chat/harvest-ext.md (shared with 003's extension; § 3 tool rounds; line numbers pre-003-change, locate by name)
+- skeleton W1: done — steps 005, 006 frozen (signatures only; bodies unchanged)
+- tests: done — steps 005, 006 (new files only)
+- red-gate: PASS (run 1; 41 failed right-reason / 138 guards passed; existing unit suite 1211 passed)
+- code: done — steps 005, 006 (serial)
+- verify: PASS (run 1; unit 1390 passed = 1211 existing + 179 new; ruff baseline held; scope confirmed by AST hunk mapping)
+- glossary: done — 0 AGENTS.md created, 2 updated-in-markers (llm/, tests/); stale out-of-marker for /finalize: llm/AGENTS.md Conventions lines 44 (inline session.post → _stream_post) and 47 (_tools_stream_request seam, chat-completions only?); tests/AGENTS.md Conventions "two older tests" os.environ → one
+
+## Skeleton
+
+### Step 005 — frozen interface (2026-11-08)
+- `llm/openai.py` — `_read_responses_tool_round(response: Any, *, output_limit_set: bool = False) -> _ResponsesToolRound` — changed (was `_read_responses_tool_round(response: Any) -> _ResponsesToolRound`)
+- `llm/openai.py` — `OpenAIAPIClient._read_responses_tool_stream(self, response: aiohttp.ClientResponse, on_delta: Callable[[str], Awaitable[None]] | None = None, *, output_limit_set: bool = False) -> _ResponsesToolRound` — changed (was the same without `output_limit_set`)
+- `llm/openai.py` — `OpenAIAPIClient.chat_with_tools(...)` — signature unchanged; body (flag computed once from `settings`, passed to both readers) left to the coder.
+- Stub note: per orchestrator instruction the flag is accepted but ignored (bodies unchanged, no throw) so the delivered suite stays green; the new-flag tests are red because the cut round still raises `LLMError`. Args docstrings for the flag added; the reader/parser/`chat_with_tools` Raises/rule text updates (DoD-13) are the coder's.
+- Caller-compile edits (out of Source-files scope): None (call sites not wired).
+- Compile gate: compileall OK, `import llm` OK, `uv run ruff check llm/openai.py` 38 errors (= baseline).
+
+### Step 006 — frozen interface (2026-11-08)
+- `llm/llama_swap.py` — `_responses_tool_round(reply: Any, *, output_limit_set: bool = False) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]` — changed (was `_responses_tool_round(reply: Any) -> tuple[...]`); body unchanged (flag accepted, not yet acted on); docstring states DEC-004-16 rule + DEC-arch-13 gap.
+- `llm/llama_swap.py` — `LlamaSwapAPIClient._stream_responses_tool_round(self, response: aiohttp.ClientResponse, on_delta: Callable[[str], Awaitable[None]] | None = None, *, output_limit_set: bool = False) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]` — changed (was without `output_limit_set`); body unchanged; docstring states DEC-004-17 rule + DEC-arch-13 gap.
+- `llm/llama_swap.py` — `LlamaSwapAPIClient.chat_with_tools` — signature unchanged; call sites not wired (coder computes `output_limit_set = "max_output_tokens" in settings` once before the loop and passes it to both).
+- Caller-compile edits (out of Source-files scope): None.
+- Compile gate: compileall OK, import OK, `ruff check llm/llama_swap.py` 41 (= baseline); existing llama-swap tools suites 97 passed.
+
+## Tests
+
+### Step 005 — tests (2026-11-08)
+- `tests/test_openai_responses_tools_output_limit.py` — new; covers DoD-1..DoD-11 — `OpenAIAPIClient.chat_with_tools` (streamed and not) plus `_read_responses_tool_round(..., output_limit_set=...)` and `_read_responses_tool_stream(None, on_delta, output_limit_set=...)` called directly; per-round `_request` replies or per-round `_stream_post` + `_iter_sse_data` events (DEC-004-14), the unused path made to fail, a request past the canned rounds failing.
+  - DoD-1: `test_openai_cut_first_round_without_call_returns_text_as_completed__DoD1`, `test_openai_tool_round_reader_flag_on_cut_without_call_returns_text__DoD1`
+  - DoD-2: `test_openai_cut_second_round_after_tool_round_returns_its_text__DoD2`
+  - DoD-3: `test_openai_cut_answer_round_returned_for_every_limit_source__DoD3` (4 limit sources x streamed/non-streamed)
+  - DoD-4: `test_openai_cut_round_with_calls_raises_and_runs_none__DoD4` (one / two calls x first / later round), `test_openai_tool_round_reader_flag_on_cut_with_calls_raises__DoD4`
+  - DoD-5: `test_openai_streamed_cut_first_round_returns_joined_text_deltas__DoD5`, `test_openai_streamed_cut_later_round_returns_text_without_reasoning__DoD5`, `test_openai_streamed_cut_closes_open_reasoning_block__DoD5`, `test_openai_tool_stream_parser_flag_on_cut_without_call_ends_like_completed__DoD5`
+  - DoD-6: `test_openai_tool_stream_parser_cut_with_started_call_raises_and_stops__DoD6`, `test_openai_streamed_cut_round_with_started_call_raises_runs_none__DoD6` (started via added item, added + fragment, fragment alone, done item alone; open reasoning block gets no closing marker)
+  - DoD-7: `test_openai_cut_round_without_app_limit_raises_with_reason__DoD7` (never set / default cleared with None under both names x streamed/non-streamed x with/without calls)
+  - DoD-8: `test_openai_other_early_end_with_app_limit_raises__DoD8`, `test_openai_streamed_other_early_end_with_app_limit_raises__DoD8`, `test_openai_tool_round_reader_flag_on_other_early_end_raises__DoD8`
+  - DoD-9: `test_openai_tool_round_reader_default_flag_cut_raises_with_reason__DoD9`, `test_openai_tool_stream_parser_default_flag_cut_raises_with_reason__DoD9`
+  - DoD-10: `test_openai_cut_answer_round_on_last_allowed_round_returns_text__DoD10`
+  - DoD-11: `test_openai_traced_cut_answer_round_recorded_as_response__DoD11` (RESPONSE sections equal to a completed answer round's, no ERROR section; streamed and not)
+- DoD-12: covered by the existing unit suite run unchanged (incl. `tests/test_openai_responses_tools.py::test_openai_failed_or_incomplete_round_raises_with_reason__DoD17` and the `_INCOMPLETE` params of the three `..._DoD8` tests in `tests/test_openai_responses_tools_stream.py`); no new test, no existing test file edited.
+- Coverage: DoD-1 ✓, DoD-2 ✓, DoD-3 ✓, DoD-4 ✓, DoD-5 ✓, DoD-6 ✓, DoD-7 ✓, DoD-8 ✓, DoD-9 ✓, DoD-10 ✓, DoD-11 ✓, DoD-12 ✓ (existing suite), DoD-13 [manual/live, no test], DoD-14 [manual/live, no test]
+
+### Step 006 — tests (2026-11-08)
+- `tests/test_llamaswap_responses_tools_output_limit.py` — new; covers DoD-1..DoD-11 — `LlamaSwapAPIClient.chat_with_tools` (streamed and not) plus `_responses_tool_round(reply, *, output_limit_set=...)` and `_stream_responses_tool_round(response, on_delta, *, output_limit_set=...)` driven directly; seams per DEC-004-14 (per-round `_request` queue with `_stream_post` forbidden; per-round `_iter_sse_data` queue behind a fake `_stream_post` with `_request` forbidden).
+  - DoD-1: `test_llamaswap_tools_cut_first_round_without_calls_returns_text__DoD1`, `..._cut_first_round_without_text_returns_empty__DoD1`, `test_llamaswap_tool_round_reader_with_flag_reads_cut_round_as_completed__DoD1` — cut first round, no calls: text equals completed-round text, one request, no tool run.
+  - DoD-2: `test_llamaswap_tools_cut_second_round_without_calls_returns_its_text__DoD2` — second-round cut answer returned, first tool ran once, two requests.
+  - DoD-3: `test_llamaswap_tools_cut_first_round_returns_text_for_every_way_the_limit_is_set__DoD3` — 4 limit ways (call/default × max_tokens/context_length) × streamed/non-streamed, equal to completed counterpart (streamed: same receiver pieces).
+  - DoD-4: `test_llamaswap_tools_cut_round_with_calls_raises_and_runs_none__DoD4` (one/two calls × first/later round), `test_llamaswap_tool_round_reader_with_flag_raises_on_cut_round_with_calls__DoD4` — LLMError carrying `max_output_tokens`, no tool of the round, no further request, earlier tool once.
+  - DoD-5: `test_llamaswap_streamed_tools_cut_round_without_call_returns_text_deltas__DoD5`, `..._cut_inside_reasoning_closes_block_with_own_piece__DoD5` (first/later round), `test_llamaswap_tool_round_parser_with_flag_ends_at_cut_without_call__DoD5` — text deltas joined, receiver pieces of every round in order, open block closed by own `</think>` piece, nothing after the event.
+  - DoD-6: `test_llamaswap_streamed_tools_cut_round_with_started_call_raises__DoD6` (call added / arguments fragment alone / done call item alone × first/later round), `test_llamaswap_tool_round_parser_with_flag_raises_on_cut_after_started_call__DoD6` — LLMError with reason, no closing marker or later piece, no tool of the round, no further request.
+  - DoD-7: `test_llamaswap_tools_cut_round_without_app_limit_raises_with_reason__DoD7` — 4 no-limit ways (never set, other options only, default cleared with None, alias default cleared) × streamed/not × with/without calls.
+  - DoD-8: `test_llamaswap_tools_other_incomplete_round_with_limit_raises__DoD8` (other reason, case, prefix, non-string, no reason, null/missing details × streamed/not), reader/parser with-flag variants, failed reply, failed/error events, unfinished stream (no completion, `[DONE]` only, empty) via the call and the parser.
+  - DoD-9: `test_llamaswap_tool_round_reader_without_flag_raises_on_cut__DoD9`, `test_llamaswap_tool_round_parser_without_flag_raises_on_cut__DoD9` — flag omitted or False.
+  - DoD-10: `test_llamaswap_tools_cut_answer_on_only_allowed_round_returns_text__DoD10` — `max_loops=1`, streamed and not.
+  - DoD-11: `test_llamaswap_traced_tools_cut_answer_is_returned_and_recorded_as_response__DoD11`, `test_llamaswap_traced_streamed_tools_cut_answer_is_returned_and_recorded__DoD11` — no ERROR section, same section titles and RESPONSE body as a completed answer round.
+- Coverage: DoD-1 ✓, DoD-2 ✓, DoD-3 ✓, DoD-4 ✓, DoD-5 ✓, DoD-6 ✓, DoD-7 ✓, DoD-8 ✓, DoD-9 ✓, DoD-10 ✓, DoD-11 ✓, DoD-12 ✓ (existing suite, no new test: `tests/test_llamaswap_responses_tools.py` `..._incomplete_later_round_ends_with_llmerror_carrying_reason__DoD17`, `tests/test_llamaswap_responses_tools_stream.py` `_FAILURE_EVENTS` incomplete entry), DoD-13 [manual/live, no test], DoD-14 [manual/live, no test]
+
+## Notes & Issues
+
+- Step 005 tests: the "server's reason" is checked as contained in the error text or equal to its `description` (the delivered 004 tests use the former). The streamed DoD-8 test also asserts nothing after a failure event is delivered (DEC-004-9 / DEC-003-13), beyond DoD-8's bare `LLMError`.
+- Step 006 tests: DoD-6 also covers a done `function_call` item alone as a started call (DEC-004-17 names it alongside the added item and the arguments fragment). Under the frozen stub (flag accepted, ignored) the no-call cut tests are red by LLMError; the with-call / no-limit / other-early-end tests are expected green on the stub, as they assert unchanged error behaviour.
+
+## Files Changed
+
+### Step 005 — OpenAI Responses tool conversation: a round cut at the app's own output limit
+- `llm/openai.py` — `_read_responses_tool_round` hands the flag to `_responses_reply_text` and raises for a matched cut holding `function_call` items (DEC-004-16); `_read_responses_tool_stream` ends a matched `response.incomplete` like completion (shared local `_end_round`) when no call started, else raises with no further piece (DEC-004-17); `chat_with_tools` computes `"max_output_tokens" in settings` once and passes it every round (DEC-004-15); docstrings state the rule.
+
+### Step 006 — llama-swap Responses tool conversation: a round cut at the app's own output limit
+- `llm/llama_swap.py` — `_responses_tool_round` hands the flag to `_responses_reply_text` and raises (reader's incomplete shape, reason `max_output_tokens`) for a matched cut holding `function_call` items (DEC-004-16); `_stream_responses_tool_round` ends a matched `response.incomplete` like completion (shared local `_end_round`) when `calls` is empty, else raises with no further piece (DEC-004-17); `chat_with_tools` computes `"max_output_tokens" in settings` once and passes it every round (DEC-004-15); docstrings state the rule and the DEC-arch-13 gap.

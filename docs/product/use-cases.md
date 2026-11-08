@@ -87,12 +87,14 @@
   - A1 An alternative name acts as the main name, across layers.
   - A2 A setting given as "nothing" is not sent; the server's default applies.
   - A3 An unknown or unsupported setting is ignored; the call proceeds.
+  - A4 The app set an output length limit and the reply reaches it: the cut text is returned, not an error (US-062).
 - **Exception flows:**
   - E1 Wrong or out-of-range value: not checked; the server's refusal surfaces as a call error.
 - **Postconditions:** the call ran with the merged settings.
 - **Note (defect, FEAT-010 gap):** today the library also sends its own values for settings the app never set.
 - **Source:**
   - A1, A2, A3, defect note: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - A4: `[confirmed: user]` interview "Delta — token-cap cut-off" (2026-11-08)
   - Evidence only (main flow, E1): behaviour per deep-docs notes I-10
 
 ### UC-005 — Stream a reply
@@ -107,16 +109,18 @@
   - A2 No receiver: the whole text is returned at the end (US-008).
   - A3 Streamed tool conversation: the receiver gets every round's text and reasoning; the call returns only the final answer.
   - A4 Empty pieces are never passed to the receiver (observed).
+  - A5 The reply reaches the output length limit the app set: the receiver got every piece; the call returns the cut text (US-062).
 - **Exception flows:**
   - E1 The server refuses: an error before any piece (UC-002 E2).
   - E2 The connection drops or the time limit runs out mid-reply: pieces already received stay with the app; the call ends with an error (observed).
-  - E3 The server sends an error inside the stream, or the stream ends early: should end with an error (defect, FEAT-004 gap).
+  - E3 The server sends an error inside the stream, or the stream ends early for a reason other than the app's own length limit: should end with an error (defect, FEAT-004 gap).
   - E4 The receiver fails: the stream stops; the call ends with that failure.
   - E5 Deprecated Ollama: streaming is refused before the server is contacted.
 - **Postconditions:** the developer holds the whole text; the receiver got every piece produced before any failure.
 - **Source:**
   - A1, A3, E4: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - E3: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - A5, E3 length-limit carve-out: `[confirmed: user]` interview "Delta — token-cap cut-off" (2026-11-08)
   - Evidence only (main flow, A2, A4, E1, E2, E5): behaviour per deep-docs notes I-04
 
 ### UC-006 — See the model's reasoning

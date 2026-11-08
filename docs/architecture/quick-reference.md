@@ -84,3 +84,5 @@ The library reads no credential from the environment. All other configuration is
 - Known defect: concurrent calls can share and overwrite one trace record (DEC-000-45).
 - Known defect: an unwritable trace folder fails the call; tracing must not change the outcome (DEC-000-47).
 - Without a usage scope the client's connection is never released (open gap; DEC-000-24).
+- Known defect: on the Responses protocol, a reply cut at the output limit the app set raises `LLMError` on OpenAI instead of returning the text (DEC-arch-13).
+- Accepted gap: on llama-swap over Responses, a reply cut at a limit the app did not set (server cap, full context) cannot be told from a complete reply and is returned as text, because the server reports it as complete (DEC-arch-13).

@@ -121,7 +121,7 @@ Decisions taken with the user while adding the Responses protocol to the OpenAI-
 - **Cites:** docs/architecture/data-model.md § Tool definition, § Message; docs/architecture/interfaces.md § Exposed: capability matrix; DEC-000-36
 
 ### DEC-arch-11 — Parsing the Responses stream by event type
-- **Status:** accepted
+- **Status:** accepted — amended by DEC-arch-13 (2026-11-08)
 - **Stage:** — · **Feature:** — (arch-responses-protocol) · **Step:** —
 - **Date:** 2026-11-07 · **Decided by:** user
 - **Question:** How are Responses stream events turned into receiver pieces, carry items and failures?
@@ -133,6 +133,7 @@ Decisions taken with the user while adding the Responses protocol to the OpenAI-
   - `response.completed` → end of stream.
   - `response.failed`, `response.incomplete` and `error` → `LLMError` carrying the server's reason.
 - **Reason:** The JSON payload carries the type itself, so the existing data-only SSE reader can be reused. Reporting failure events closes the in-stream gap (DEC-000-13) on this protocol.
+- **Amended:** 2026-11-08, user — the `response.incomplete` clause: when the reason is `max_output_tokens` and the app set the output limit, `response.incomplete` ends the stream like `response.completed` instead of raising; with no app limit, and for every other reason, it stays `LLMError` (DEC-arch-13).
 - **Lands in:** `llm/openai.py`, `llm/llama_swap.py`, `llm/llm_client.py` (SSE reader reuse)
 - **Cites:** docs/architecture/subsystems.md § Streaming and reasoning; docs/architecture/interfaces.md § Exposed: error contract; DEC-000-13, DEC-000-20
 
@@ -149,3 +150,23 @@ Decisions taken with the user while adding the Responses protocol to the OpenAI-
 - **Reason:** Keeps today's behaviour pinned while the default changes, and checks the wire assumptions against real servers.
 - **Lands in:** `tests/`, `tests/integrations/`
 - **Cites:** docs/architecture/subsystems.md § Chat protocols
+
+### DEC-arch-13 — A reply cut at the app's own output limit is returned, not an error
+- **Status:** accepted
+- **Stage:** — · **Feature:** — (arch-responses-protocol) · **Step:** —
+- **Date:** 2026-11-08 · **Decided by:** user
+- **Question:** What does the library do when a Responses reply stops because of the output token limit?
+- **Decision:** It depends on who set the limit. "The app set the limit" means `max_tokens` (or one of its aliases) is present in the settings after the three-layer merge, whether as a call-time option or as a client default.
+  - **App set the limit.**
+    - *Non-streamed.* A reply with status `incomplete` and reason `max_output_tokens` returns the extracted text exactly as a completed reply does (extraction per DEC-003-12).
+    - *Streamed.* `response.incomplete` with that reason ends the stream as `response.completed` does. A reasoning block still open is closed by a `</think>` piece, and the return equals what the receiver got (DEC-003-13).
+    - *Tool conversation.* A cut round with no tool calls is the answer and is returned. A cut round that contains tool calls ends with `LLMError`, because the calls' arguments may be truncated, so they are not run.
+    - *JSON answers.* `chat_json` and the JSON answer formats keep their check: a cut answer that is not valid JSON fails as any invalid JSON does.
+    - No warning or separate notice is given.
+  - **App set no limit.** `incomplete` / `response.incomplete` with reason `max_output_tokens` stays `LLMError` carrying the server's reason.
+  - **Unchanged.** Every other incomplete reason (e.g. content filter), `failed` / `response.failed`, the `error` event, and a stream that ends without a completion event stay `LLMError` as before.
+  - **llama-swap (accepted gap).** llama.cpp reports a capped reply as `completed` with no incomplete details (`incomplete_details: null`, `usage.output_tokens` equal to the cap, the stream ending `response.completed`; feature 005 live run). A cut at the app's limit therefore already returns text. A cut at a limit the app did not set (the server's own cap, a full context) cannot be told apart from a complete reply and is returned as text. US-062.AC-6 cannot be met on llama-swap until the server reports the reason.
+- **Reason:** The caller chose the limit and must expect a cut answer (user, 2026-11-08). Other early stops are breaks the app did not cause, so they stay errors (US-024 narrowed).
+- **Rejected:** An error on every cut (the previous rule, DEC-003-12 / DEC-003-13 / DEC-arch-11). Returning the text with a warning (user: no signal). Returning text for every length stop regardless of who set the limit (user kept the error for cuts the app did not ask for). For now, inferring a llama-swap cut from `usage.output_tokens`: it only identifies the case that must return text anyway, and it would need the cap value the server applied.
+- **Lands in:** `llm/openai.py`, `llm/llama_swap.py` (Responses reply extraction, Responses stream parser, tool-round reading streamed and not)
+- **Cites:** docs/architecture/interfaces.md § Exposed: error contract; DEC-arch-11; DEC-003-12; DEC-003-13; DEC-004-8; DEC-004-9; DEC-004-13; DEC-005-6; DEC-005-8; US-062; US-024.AC-2

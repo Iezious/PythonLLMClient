@@ -71,10 +71,10 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - A streamed tool conversation gives the receiver every round's text and reasoning; the call returns only the final answer.
   - JSON-only answers are not streamed (out of scope).
 - **Delivered:** legacy
-- **Realized by:** UC-005; US-008, US-013, US-021, US-022, US-023, US-024, US-036
+- **Realized by:** UC-005; US-008, US-013, US-021, US-022, US-023, US-024, US-036, US-062
 - **Gap:**
   - _TBD: apps need a stream they can consume incrementally and stop early, with answer text, reasoning and tool-call fragments as separate parts — not yet supported_
-  - _TBD: defect — an error the server sends inside a stream, or a stream that ends early, must be reported as an error; today the app gets partial or empty text silently — to be met on the Responses protocol (FEAT-014); open for chat completions_
+  - _TBD: defect — an error the server sends inside a stream, or a stream that ends early for a reason other than the app's own output length limit, must be reported as an error; today the app gets partial or empty text silently — to be met on the Responses protocol (FEAT-014); open for chat completions_
   - _TBD: defect — streamed text must arrive complete: non-English characters and replies from servers that end lines differently or split one piece over several lines currently lose text_
 - **Source:**
   - `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
@@ -82,6 +82,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Receiver rules, tool-conversation streaming, JSON out of scope: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - Complete-text defect gap: `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
   - Stream-error gap annotation (Responses): `[confirmed: user]` interview "challenges — Responses delta" (2026-11-07), C3
+  - Length-limit carve-out: `[confirmed: user]` interview "Delta — token-cap cut-off" (2026-11-08)
 
 ### FEAT-005 — See the model's reasoning
 - **Purpose:** Ask for model reasoning in one backend-neutral way and receive it when streaming. · **Actors:** ACT-001, ACT-002 · **Priority:** must
@@ -191,9 +192,11 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - A setting given as "nothing" is not sent, so the server's own default applies.
   - Unknown or unsupported settings are ignored without error, so the same settings work on every backend.
   - Each backend accepts its own alternative names for some settings.
+  - A reply cut short by an output length limit the app set is a normal result: the text produced is returned, without an error and without a separate notice. A reply stopped for length when the app set no limit is an error.
 - **Delivered:** legacy
-- **Realized by:** UC-004; US-014, US-015, US-016, US-017, US-018, US-019, US-020
+- **Realized by:** UC-004; US-014, US-015, US-016, US-017, US-018, US-019, US-020, US-062
 - **Gap:**
+  - _TBD: defect — a reply cut short by the app's own output length limit must be returned as text; today on OpenAI's Responses protocol the call ends with an error_
   - _TBD: llama-swap should also accept top-k, min-p and repeat-penalty controls, sent only when the app sets them; today they are silently ignored_
   - _TBD: defect — only settings the app set should be sent; today the library sends its own values for several settings, overriding the server's or model's presets_
   - _TBD: defect — stop sequences, token bias, end-user identifier and response format, which the library offers as settings, must reach the server; today they are silently ignored_
@@ -201,6 +204,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Base feature, llama-swap controls gap: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (llama-swap bullet); "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"; "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (send only what is set)
   - Rules ("nothing", unknown ignored, alternative names) and defect gaps: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
   - Precedence (call > client default > library value): behaviour per deep-docs notes I-10
+  - Rule (output length limit cut-off is a normal result), defect gap: `[confirmed: user]` interview "Delta — token-cap cut-off" and "challenges — token-cap cut-off" (2026-11-08)
 
 ### FEAT-011 — Trace every LLM interaction
 - **Purpose:** Turn on, through the environment, a readable per-call record of prompts, requests, streamed pieces, tool calls and results, answers and errors, as a debugging aid. · **Actors:** ACT-001 · **Priority:** must

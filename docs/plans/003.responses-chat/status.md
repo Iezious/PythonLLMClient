@@ -7,6 +7,8 @@
 | 003  | `003.openai-responses-stream.md`     | done    | PASS     | 2026-11-08 |
 | 004  | `004.llamaswap-responses-request.md` | done    | PASS     | 2026-11-08 |
 | 005  | `005.llamaswap-responses-stream.md`  | done    | PASS     | 2026-11-08 |
+| 006  | `006.openai-output-limit-cut.md` | done    | PASS     | 2026-11-08 |
+| 007  | `007.llamaswap-output-limit-cut.md` | done    | PASS     | 2026-11-08 |
 
 ## Skeleton
 
@@ -244,3 +246,74 @@
 - Coverage: DoD-1 ✓, DoD-2 ✓ (amended), DoD-3 ✓, DoD-4 ✓, DoD-5 ✓, DoD-6 ✓, DoD-7 ✓, DoD-8 ✓, DoD-9 ✓, DoD-10 ✓, DoD-11 ✓, DoD-12 ✓, DoD-13 ✓, DoD-14 ✓, DoD-15 ✓, DoD-16 ✓, DoD-17 ✓, DoD-18 ✓
 - 2026-11-08 correction: README line 19 finally reads "…before the protocol split under the new names" (supersedes the 0.2.0 wording noted in Files Changed)
 - 2026-11-08 correction verify: PASS (unit 878; live 62/66, 4 known env; live probe llama-swap [user, assistant, user] OK). Glossary: llm/AGENTS.md + tests/AGENTS.md version lines → 0.2.0. Advisory: no live OpenAI test sends an assistant turn over Responses.
+
+## Ultra phase — extension 006–007 (DEC-arch-13)
+
+- orient: done 2026-11-08 — remaining steps 006, 007 only (001–005 delivered above) · typecheck: isolated (compileall + import + ruff) · pairable: 2
+- mode: serial — tree not clean (commit or stash to allow worktree mode) · profile: light (Python, single package, .venv)
+- waves: W1 006, 007 (disjoint source files; changed symbols are file-private helpers with a defaulted keyword, no caller elsewhere breaks)
+- harvest: done — docs/.cache/ultra/003.responses-chat/harvest-ext.md (1 report, planning-time)
+- skeleton W1: done — steps 006, 007 frozen (signatures only; bodies unchanged)
+- tests: done — steps 006, 007 (new files only)
+- red-gate: PASS (run 1; 54 failed right-reason / 68 guards passed; existing unit suite 1089 passed)
+- code: done — steps 006, 007 (serial)
+- verify: PASS (run 1; unit 1211 passed = 1089 existing + 122 new; ruff baseline held; tool-round code untouched)
+- glossary: done — 0 AGENTS.md created, 2 updated-in-markers (llm/, tests/); stale out-of-marker for /finalize: tests/AGENTS.md Conventions "two older tests" set os.environ → now one (test_llm_options.py)
+
+## Skeleton
+
+### Step 006 — frozen interface (2026-11-08)
+- `llm/openai.py` — `def _responses_reply_text(response: Any, *, output_limit_set: bool = False) -> str` (module-level) — changed (was `_responses_reply_text(response: Any) -> str`). Body unchanged (flag accepted, not yet acted on); docstring states the DEC-003-17..20 / DEC-arch-13 rule.
+- `llm/openai.py` — `async def OpenAIAPIClient._read_responses_stream(self, response: aiohttp.ClientResponse, on_delta: Callable[[str], Awaitable[None]] | None = None, *, output_limit_set: bool = False) -> str` — changed (was same without `*, output_limit_set`). Body unchanged; docstring states the new rule.
+- Not frozen here (coder's, no signature change): `chat` / `chat_json` compute `"max_output_tokens" in settings` and pass `output_limit_set=` to the reader/parser; docstrings of `chat`, `generate`, `chat_json` updated by the coder. Call sites not yet wired.
+- Stub note: the flag-on path is NOT a throwing stub (DoD-12 requires the delivered suite to stay green); with the flag on the reader/parser still raise on every incomplete reply/event, so new flag-on tests are red until the coder lands the branch.
+- Compile gate: `compileall` clean, `import llm` clean, `ruff check llm/openai.py` findings identical to baseline (38, pre-existing); OpenAI Responses unit files (245 tests) pass.
+- Caller-compile edits (out of Source-files scope): None.
+
+### Step 007 — frozen interface (2026-11-08)
+- `llm/llama_swap.py` — `def _responses_reply_text(reply: Any, *, output_limit_set: bool = False) -> str` — changed (was `def _responses_reply_text(reply: Any) -> str`). Body unchanged; the flag is accepted but not yet acted on (new branch is the coder's). Args docstring entry for `output_limit_set` added (DEC-003-17..20).
+- `llm/llama_swap.py` — `async def LlamaSwapAPIClient._stream_responses_response(self, response: aiohttp.ClientResponse, on_delta: Callable[[str], Awaitable[None]] | None = None, *, output_limit_set: bool = False) -> str` — changed (was same without `*, output_limit_set`). Body unchanged; flag not yet acted on. Args docstring entry added.
+- Call sites (`chat` non-streamed/streamed, `chat_json`) not yet wired — coder's work per step intent; they compile unchanged because the flag defaults to `False`.
+- Compile gate: `compileall` OK; import OK (`inspect.signature` confirms both); `ruff check llm/llama_swap.py` 41 findings, identical to baseline (I001 x1, UP006 x20, UP035 x3, UP045 x17). Existing llama-swap Responses request/stream suites: 102 passed.
+- Caller-compile edits (out of Source-files scope): None.
+
+## Tests
+
+### Step 006 — tests (2026-11-08)
+- `tests/test_openai_responses_output_limit.py` — covers DoD-1, DoD-2, DoD-3, DoD-4 — non-streamed `chat` / `generate` / `chat_json` with the app's limit (`max_tokens` or `context_length`, call option or default) on a reply with status incomplete + reason `max_output_tokens` return the text extracted as from a completed reply with the same output (`""` without text); reader `_responses_reply_text(..., output_limit_set=True)` extracts the cut text; `chat_json` without a shape returns cut non-JSON text, with a shape a cut invalid-JSON answer raises the same `LLMError` (type, message, description) as a completed one, and a cut valid-JSON answer is returned.
+- `tests/test_openai_responses_output_limit.py` — covers DoD-5, DoD-6, DoD-7 — no app limit (never set; `max_tokens` / `context_length` default cleared per call with `None`): non-streamed `chat`, `chat_json` and streamed `chat` raise `LLMError` with description `max_output_tokens` (body carries no `max_output_tokens`); with the limit set, other reasons (`content_filter`, different case, prefix, non-string), no reason, null and missing incomplete details raise, streamed and not (string reasons / JSON of details as description); failed reply, failed event, error event and a stream without completion (incl. `[DONE]`, empty) still raise, nothing delivered after a failure event.
+- `tests/test_openai_responses_output_limit.py` — covers DoD-8, DoD-9 — streamed `chat` with the limit (four sources): pieces before the matching incomplete event in order, none after, return == concatenation, one `/responses` stream; no-receiver return; open reasoning block closed by a separate `</think>` piece (joined `<think>…</think>`); streamed `generate` == one-message `chat` (pieces, return, request).
+- `tests/test_openai_responses_output_limit.py` — covers DoD-10 — reader and `_read_responses_stream` without the flag raise `LLMError` with reason `max_output_tokens` (parser delivers nothing after); contrast: parser with `output_limit_set=True` returns the text before the event.
+- `tests/test_openai_responses_output_limit.py` — covers DoD-11 — traced non-streamed and streamed cut replies return the text; the record has no ERROR section and its RESPONSE sections equal those of the same reply / stream ending completed.
+- DoD-12 — covered by the existing unit suite unchanged (`tests/test_openai_responses_request.py::test_openai_chat_incomplete_reply_raises_with_reason__DoD5`, `tests/test_openai_responses_stream.py` `_INCOMPLETE` params of `test_openai_stream_failure_event_raises_with_server_reason__DoD5` and `..._without_message_carries_reason_as_json__DoD5`); no new test, no existing test file edited.
+- Coverage: DoD-1 ✓, DoD-2 ✓, DoD-3 ✓, DoD-4 ✓, DoD-5 ✓, DoD-6 ✓, DoD-7 ✓, DoD-8 ✓, DoD-9 ✓, DoD-10 ✓, DoD-11 ✓, DoD-12 ✓ (existing suite), DoD-13 [manual/live, no test], DoD-14 [manual/live, no test]
+
+#### Notes
+- DoD-11 compares the cut record's RESPONSE sections with those of a completed reply, rather than a fixed layout; section titles come from the trace record headings used in `tests/test_llm_trace.py`.
+- DoD-6 asserts only `LLMError` (no description) for a non-string reason and for null / missing incomplete details. DEC-003-18 says these keep "the description built as before" and does not give an exact value.
+- Expected red before the coder's branch: every flag-on test (DoD-1..4, 8, 9, 11, and the DoD-10 contrast). Expected green on the stubs: the DoD-5/6/7/10 default-path raises. That is expected for a "stays an error" contract, not a tautology.
+- Not run; ruff not run (no command execution in this role). Written to py311 style, lines at most 120.
+
+### Step 007 — tests (2026-11-08)
+- `tests/test_llamaswap_responses_output_limit.py` — covers DoD-1, DoD-2, DoD-3 — non-streamed `chat` / `generate` (`_request` seam) on a reply with status `incomplete` + reason `max_output_tokens` return the text extracted exactly as from a completed reply with the same output (reasoning ignored, `""` without text), for `max_tokens` / `context_length` as call option or client default; reader `_responses_reply_text(..., output_limit_set=True)` extracts cut text == completed.
+- `tests/test_llamaswap_responses_output_limit.py` — covers DoD-4 — `chat_json` without shape returns cut (even invalid-JSON) text; with shape, a cut invalid-JSON answer raises the same `LLMError` (type, str, description) as a completed invalid-JSON answer; cut valid JSON passes.
+- `tests/test_llamaswap_responses_output_limit.py` — covers DoD-5, DoD-6, DoD-7 — no app limit (never set, other options only, default `max_tokens` / `context_length` cleared per call with `None`) → `LLMError` carrying `max_output_tokens`, streamed and not (plus `generate`, `chat_json`); with the limit set, other reason / different case / prefix-only / non-string reason / no reason / null / missing details → `LLMError` (reason or detail text carried where a string), streamed and not, nothing after delivered; failed reply, failed event, error event, unfinished stream (no completion, `[DONE]` only, empty) → `LLMError` with the reason, via `chat` and via the parser with the flag on.
+- `tests/test_llamaswap_responses_output_limit.py` — covers DoD-8, DoD-9 — streamed `chat` (`_stream_post` + `_iter_sse_data` seams) with the limit set: pieces before the matching `response.incomplete` in order, nothing after (text / failed / completed), return == concatenation; no receiver; an open reasoning block closed by a separate `</think>` piece (first run and a later run); parser with flag on directly; streamed `generate` == one-message `chat` (pieces, return, payload) and closes an open block.
+- `tests/test_llamaswap_responses_output_limit.py` — covers DoD-10 — reader and parser called without the flag, and with it explicitly `False`, raise `LLMError` with the reason on a cut reply / event.
+- `tests/test_llamaswap_responses_output_limit.py` — covers DoD-11 — traced non-streamed and streamed `chat` with the limit set return the cut text; the record has no ERROR section, the same section titles and the same RESPONSE bodies as the record of a completed reply with the same output.
+- DoD-12 — covered by the existing suite, no new test: `tests/test_llamaswap_responses_request.py::test_llamaswap_chat_incomplete_reply_raises_with_reason__DoD5` and the incomplete params (`cut-r9`, no-reason) of `tests/test_llamaswap_responses_stream.py::test_llamaswap_failure_event_raises_llmerror_with_reason__DoD6`; no existing test file edited.
+- Coverage: DoD-1 ✓, DoD-2 ✓, DoD-3 ✓, DoD-4 ✓, DoD-5 ✓, DoD-6 ✓, DoD-7 ✓, DoD-8 ✓, DoD-9 ✓, DoD-10 ✓, DoD-11 ✓, DoD-12 ✓ (existing suite), DoD-13 [manual/live, no test], DoD-14 [manual/live, no test]
+
+#### Notes
+- DoD-6 asserts only `LLMError` (no text) for a non-string reason and for null / missing details, since the exact fallback description is not pinned for those; the `{"detail": "trunc-k3"}` case asserts the JSON-text fallback carries `trunc-k3` (DEC-003-12 / DEC-003-13).
+- DoD-11 trace comparison uses a module-local section splitter over the documented headings (same layout as `tests/test_llm_trace.py`); only titles and RESPONSE bodies are compared, so timestamps cannot differ.
+- Expected red gate: the tests that expect returned cut text (DoD-1..4 except the shape-invalid case, DoD-8, DoD-9, DoD-11) should fail on `LLMError` raised by the unchanged reader / parser. The tests that expect an error (DoD-4 shape-invalid, DoD-5, DoD-6, DoD-7, DoD-10) assert the rule that is unchanged, so they may already pass before the change. That is by design (regression guards), not tautology.
+- Not run; ruff not run (no command execution in this role).
+
+## Files Changed
+
+### Step 006 — OpenAI Responses chat: a reply cut at the app's own output limit is returned
+- `llm/openai.py` — `_responses_reply_text` and `_read_responses_stream` act on `output_limit_set` (exact `"max_output_tokens"` reason returns text / ends as at completion); `chat` (both paths) and `chat_json` pass `"max_output_tokens" in settings`; docstrings of reader, parser, `chat`, `generate`, `chat_json` state the DEC-arch-13 / DEC-003-17..19 rule
+
+### Step 007 — llama-swap Responses chat: a reply cut at the app's own output limit is returned
+- `llm/llama_swap.py` — `_responses_reply_text` and `_stream_responses_response` act on `output_limit_set` (exact `"max_output_tokens"` reason returns text / ends as at completion, open reasoning block closed by its own `</think>`); `chat` (both paths) and `chat_json` pass `"max_output_tokens" in opt`; docstrings of reader, parser, `chat`, `generate`, `chat_json` state the DEC-arch-13 / DEC-003-17..19 rule and the accepted llama-swap gap

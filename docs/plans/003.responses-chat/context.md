@@ -91,3 +91,17 @@ Dependency waves: {001} → {002, 004} → {003, 005}. Step 001 must land first:
 - **Chat-completions class**: `OpenAIChatCompletionsClient` / `LlamaSwapChatCompletionsClient`.
 - **No-counterpart setting**: a supported key with no Responses field (DEC-003-9); dropped with `LLMSettingIgnoredWarning`.
 - **Thinking on / off / unset**: `enable_thinking` truthy / set and falsy / not in the merged settings.
+
+## Extension 2026-11-08 — DEC-arch-13
+
+User request (2026-11-08): change the code to follow DEC-arch-13 as additional steps of the current features. This folder gets the chat (non-tool) part as steps 006 (OpenAI, `llm/openai.py`) and 007 (llama-swap, `llm/llama_swap.py`); feature 004 gets the tool-round part in its own planning pass. Everything above still binds these steps; this section adds only what is new.
+
+- **Stories.** US-062.AC-1, AC-2, AC-3, AC-5, AC-6 and US-024.AC-2 (narrowed: early ends other than a cut at the app's limit stay errors). US-062.AC-4 (tool conversation) is feature 004's.
+- **Architecture.** `docs/architecture/interfaces.md` § Exposed: error contract and § Streaming callback, unchanged. Design: DEC-arch-13, which amends DEC-arch-11, DEC-003-12 and DEC-003-13.
+- **Decisions.** DEC-003-17 (the flag and how the caller computes it), DEC-003-18 (which reason matches), DEC-003-19 (what a matched cut does, streamed and not), DEC-003-20 (the flag name is shared with feature 004). Steps cite them by id.
+- **Code baseline.** Unlike the "before 001" note above, the line numbers in `006.context.md` / `007.context.md` come from the 2026-11-08 harvest of the current code (after feature 004 was delivered). The skeleton and the coder still locate each site by name.
+- **Scope.** One source file per step; no other library file changes. Each step writes one new test file; no existing test file is edited. The two steps share no file and do not depend on each other.
+- **Unchanged neighbours.** Any caller of the reply reader or the stream parser that passes no flag — including feature 004's tool-round code — keeps today's behaviour; the flag's default is off. The `chat_json` parse check (DEC-000-37, DEC-002-7) runs after the trace block only when an expected shape is given and needs no change to meet US-062.AC-5. A returned cut reply is logged as the call's response like any completed reply. No warning or notice is given (DEC-arch-13).
+- **Test vocabulary.** A **cut at the app's limit**: a non-streamed reply with status `incomplete` and `incomplete_details.reason` `"max_output_tokens"`, or a streamed `response.incomplete` event whose `response.incomplete_details.reason` is `"max_output_tokens"`, on a call where the app set the limit. The app **sets the limit** through `max_tokens` or the `context_length` alias, as a call option or a client default; it **sets no limit** when neither is set, or when a default is cleared per call with `None` (DEC-000-5).
+- **Live.** The live check lands in feature 005 step 002's token-cap live tests, revised in a separate pass; no live file is in these steps' scope.
+- **Folder guides.** `llm/AGENTS.md` lines describing the old rule are refreshed by the glossary pass after verify; the coder does not edit them.

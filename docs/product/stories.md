@@ -255,11 +255,11 @@
 ### US-024 — Failures inside a stream are reported
 - **Feature:** FEAT-004 · **Actor:** ACT-001 · **Realizes:** UC-005 (E3)
 - **Status:** not met (defect) — today the app gets partial or empty text silently
-- **Story:** As an application developer, I want a broken stream reported as an error, so that I never mistake partial text for a complete reply.
+- **Story:** As an application developer, I want a stream broken by something I did not cause reported as an error, so that I never mistake partial text from a failure for a complete reply.
 - **Acceptance criteria:**
   - **US-024.AC-1** — Given the server sends an error inside the stream, when the developer streams, then the call ends with an error.
-  - **US-024.AC-2** — Given the stream ends before the reply is complete, when the developer streams, then the call ends with an error.
-- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - **US-024.AC-2** — Given the stream ends before the reply is complete, for a reason other than the output length limit the app set, when the developer streams, then the call ends with an error.
+- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07); AC-2 narrowed: interview "Delta — token-cap cut-off" (2026-11-08); narrowed story text: `[confirmed: user]` interview "challenges — token-cap cut-off" C1 (2026-11-08)
 
 ### US-025 — Turn reasoning on or off
 - **Feature:** FEAT-005 · **Actor:** ACT-001 · **Realizes:** UC-006 (step 1, A6, A7)
@@ -706,5 +706,18 @@
   - **US-061.AC-1** — Given a setting with no counterpart on Responses, when the developer calls, then the call proceeds without it.
   - **US-061.AC-2** — Given a setting with no counterpart on Responses, when the developer calls, then the developer is told it was ignored.
 - **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+
+### US-062 — A reply cut short by my output length limit is returned
+- **Feature:** FEAT-010, FEAT-004 · **Actor:** ACT-001 · **Realizes:** UC-004 (A4), UC-005 (A5)
+- **Status:** not met (defect) — today on OpenAI's Responses protocol the call ends with an error
+- **Story:** As an application developer, I want a reply cut short by the length limit I set returned as text, so that a limit I chose is a normal result, not a failure.
+- **Acceptance criteria:**
+  - **US-062.AC-1** — Given an output length limit set by the app, when the reply is cut short at that limit, then the call returns the text produced, not an error (chat and generate, on OpenAI and llama-swap, on both protocols).
+  - **US-062.AC-2** — Given streaming and an output length limit set by the app, when the reply is cut short at that limit, then the receiver got every piece produced.
+  - **US-062.AC-3** — Given streaming and an output length limit set by the app, when the reply is cut short at that limit, then the call returns the whole text the receiver got.
+  - **US-062.AC-4** — Given a tool conversation and an output length limit set by the app, when the final answer is cut short at that limit, then the call returns the cut answer.
+  - **US-062.AC-5** — Given the app asked for a checked JSON answer and set an output length limit, when the answer is cut short at that limit and is not valid JSON, then the call ends with the same error as any invalid JSON answer.
+  - **US-062.AC-6** — Given no output length limit set by the app, when the server stops the reply for length, then the call ends with an error.
+- **Source:** `[confirmed: user]` interview "Delta — token-cap cut-off" and "challenges — token-cap cut-off" (2026-11-08)
 </auto-generated>
 <!-- product-spec:end -->

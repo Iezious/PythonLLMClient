@@ -133,3 +133,30 @@ From a llama.cpp probe behind llama-swap (2026-11-07) and OpenAI's documented AP
 - **Round text**: the reply's answer text for a round, without reasoning or markers.
 - **Carry item**: a reasoning output item kept verbatim to be re-sent on later rounds of the same call (DEC-004-7).
 - **Internal copy**: the loop's private copy of the conversation in chat-completions turn shapes (DEC-004-6).
+
+## Extension 2026-11-08 — DEC-arch-13
+
+**Request (user, 2026-11-08):** change the code to follow DEC-arch-13 "as additional steps of current features". Feature 003 gets the chat part (its steps 006 and 007). This folder gets the tool-round part as steps 005 and 006. Steps 001–004 are delivered and unchanged; the sections above describe them and stay as written.
+
+**What the extension delivers.** The tool part of DEC-arch-13 (`docs/decisions/arch-responses-protocol.md`; cite it, do not restate it). The amended DEC-004-8, DEC-004-9 and DEC-004-13 are binding. The stories are US-062.AC-4 (tool conversation: a cut final answer is returned), US-062.AC-6 (no app limit → error) and US-024.AC-2 (other early ends stay errors). Architecture is unchanged.
+
+**Builds on feature 003's extension.** 003 step 006 (OpenAI) and step 007 (llama-swap) add the keyword-only `output_limit_set` flag to each class's non-streamed reply reader and chat stream parser (DEC-003-17). They also fix the exact reason match (DEC-003-18), the completed-like handling (DEC-003-19) and the shared name (DEC-003-20). Steps 005 and 006 call that reader and reuse the name, so step 005 depends on 003 step 006 and step 006 depends on 003 step 007. Re-read the built code; the line numbers in the step contexts were harvested before 003's extension landed.
+
+**Decisions for the extension:** DEC-004-15 .. DEC-004-18 in `docs/decisions/004.responses-tools.md`.
+
+**Files touched by the extension.**
+
+| File | Steps |
+|---|---|
+| `llm/openai.py` | 005 |
+| `llm/llama_swap.py` | 006 |
+
+The two steps touch different files and may run in parallel once their 003 dependencies are done. Every other rule in § Files touched across steps and § Cross-cutting constraints still holds. In particular, nothing is imported across the two Responses modules.
+
+**Size.** Each step holds a flag on two readers, two branches and one computation in the loop, plus docstrings: about 30–50 LoC, below the budget. They are not merged, because they touch different files and depend on different 003 steps.
+
+**Tests for the extension.** Only new test files are added (`tests/test_openai_responses_tools_output_limit.py`, `tests/test_llamaswap_responses_tools_output_limit.py`). No existing test file is edited. Every existing incomplete-round test runs without an app limit, so it is the no-limit case and must stay green. Live coverage lands in feature 005, which is revised separately.
+
+**Vocabulary for the extension.**
+- **Cut at the app's limit**: a round whose incomplete reason matches DEC-003-18 while the app set the output limit (DEC-004-15).
+- **Started call** (streamed): any tool call the round parser has begun assembling, whether from an added call item, an arguments fragment or a done call item.

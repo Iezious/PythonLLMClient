@@ -4,13 +4,14 @@
 - US-058 — AC-1..AC-5 met: a two-round tool conversation completes on an OpenAI reasoning model and on llama-swap (live). Each round's reasoning goes back to the server within the call. The app's conversation and the returned answer hold no reasoning.
 - UC-013 A2 — delivered.
 - US-023.AC-1, AC-2; US-027.AC-1, AC-2; US-030; US-031; US-032; US-033; US-034; US-035.AC-1..AC-3; US-037 — hold on the default protocol as on chat completions.
-- US-057.AC-1 — the modification recorded by 003 for incomplete replies also applies to tool rounds: a round the server marks as incomplete ends the tool conversation with the library's error carrying the server's reason. Confirm with the user together with 003's item.
+- US-057.AC-1 — the modification recorded by 003 for incomplete replies also applies to tool rounds. A round the server marks as incomplete ends the tool conversation with the library's error carrying the server's reason, except for a round cut at an output limit the app set: that round is the answer when it requests no tool, and still ends with the error when it requests a tool, whose tools are then not run (US-062.AC-4, AC-6). Confirm with the user together with 003's item. _Amended 2026-11-08 (DEC-arch-13, extension steps 005/006). It was: "the modification recorded by 003 for incomplete replies also applies to tool rounds: a round the server marks as incomplete ends the tool conversation with the library's error carrying the server's reason."_
+- US-062.AC-4, AC-6 — tool-conversation part delivered on OpenAI. On llama-swap, AC-4 holds because the server reports a capped round as complete; AC-6 is not met there (the accepted gap recorded with the user's output-limit decision).
 - US-061 — the developer is also told about ignored settings when the first call to drop them is a tool conversation.
 
 ## Architecture
 
 - `interfaces.md` § Protocol axis, OpenAI family — the "reasoning carried between tool rounds" and "`response_format` in tool chat" rows go from planned to built.
-- `interfaces.md` § Exposed: error contract — remove the interim row added by 003's outcome (a tool conversation on a Responses class is refused before the server is contacted). The tool-loop failure rows hold on both protocols. A failed or incomplete reply in a tool round, or a failure inside a tool-round stream, ends the call with the library error carrying the server's reason.
+- `interfaces.md` § Exposed: error contract — remove the interim row added by 003's outcome (a tool conversation on a Responses class is refused before the server is contacted). The tool-loop failure rows hold on both protocols. A failed or incomplete reply in a tool round, or a failure inside a tool-round stream, ends the call with the library error carrying the server's reason. The one exception is a round the server stops at an output limit the app set: with no tool call it is the answer, and with a tool call it ends the call with the library error and its tools are not run. _Amended 2026-11-08 (user's output-limit decision, extension steps 005/006). It was: "… A failed or incomplete reply in a tool round, or a failure inside a tool-round stream, ends the call with the library error carrying the server's reason."_
 - `interfaces.md` § Exposed: client method contract / capability matrix — drop the interim note that tool conversations are unavailable on the Responses classes. Streaming in tool chat is offered on both protocols.
 - `interfaces.md` § Consumed: backend APIs — on the Responses route, tool definitions are sent in the protocol's tool shape, and tool calls and their results travel as items. In the Responses stream format, tool-call items, argument fragments and reasoning items to carry over are built.
 - `subsystems.md` § Tool loop — reasoning carry on Responses goes from planned to built.
@@ -34,6 +35,10 @@
 - DEC-004-12 — The ignored-setting warning also covers tool conversations
 - DEC-004-13 — Live tool tests: files, models, tools and settings
 - DEC-004-14 — Test seams for Responses tool rounds
+- DEC-004-15 — The tool-round readers take the output-limit flag; chat_with_tools computes it once per call
+- DEC-004-16 — A non-streamed round cut at the app's limit: the answer without tool calls, an error with them
+- DEC-004-17 — A streamed round cut at the app's limit: ends like completed without a started call, an error with one
+- DEC-004-18 — A cut round leaves earlier rounds and the other loop rules unchanged
 
 ## Observations
 

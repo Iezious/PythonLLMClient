@@ -44,5 +44,6 @@
 - **Responses protocol** — the default chat protocol.
 - **chat completions** — the chat protocol kept for compatibility with servers that do not offer Responses.
 - **reasoning summary** — OpenAI's summary of its hidden reasoning.
+- **output length limit** — the most text the app lets the model produce for one reply; reaching it ends the reply early, which is a normal result.
 </auto-generated>
 <!-- product-spec:end -->
