@@ -2,7 +2,7 @@
 
 **Stage:** — · **Feature:** — (architect session `responses-protocol`, 2026-11-07; no roadmap yet)
 
-Decisions taken with the user while adding the Responses protocol to the OpenAI-family clients. They sit below the architecture recorded in `docs/architecture/` (§ references in each entry). The design is planned, not yet built; "Lands in" names the planned code locations. Ids use the `arch` namespace (`DEC-arch-<n>`); the counter is shared by every `arch-<slug>.md` file so ids stay unique.
+Decisions taken with the user while adding the Responses protocol to the OpenAI-family clients. They sit below the architecture recorded in `docs/architecture/` (§ references in each entry). The design is built: features 003.responses-chat and 004.responses-tools (stage 002.responses) delivered it on 2026-11-08, and their decisions (DEC-003-*, DEC-004-*) realize these entries inside the classes; "Lands in" names the code locations as planned at the time. Ids use the `arch` namespace (`DEC-arch-<n>`); the counter is shared by every `arch-<slug>.md` file so ids stay unique.
 
 ### DEC-arch-1 — Protocol chosen by client class; existing names mean Responses
 - **Status:** accepted
@@ -63,11 +63,11 @@ Decisions taken with the user while adding the Responses protocol to the OpenAI-
 - **Stage:** — · **Feature:** — (arch-responses-protocol) · **Step:** —
 - **Date:** 2026-11-07 · **Decided by:** user
 - **Question:** How does the library tell the app that a setting was ignored because Responses has no counterpart for it?
-- **Decision:** It uses Python's `warnings` mechanism with a library-specific subclass of `UserWarning`, emitted once per setting per client instance. The class name is settled in planning.
+- **Decision:** It uses Python's `warnings` mechanism with a library-specific subclass of `UserWarning`, emitted once per setting per client instance. The class is `LLMSettingIgnoredWarning` (name settled in planning, DEC-003-5; emission rule DEC-003-6, tool conversations DEC-004-12).
 - **Reason:** Warnings are shown by default and can be filtered by category without any app logging setup.
 - **Rejected:** The `logging` module: it depends on the app's logging configuration and is quiet by default.
-- **Lands in:** `llm/exceptions.py` or a new module in `llm/` (planning), `llm/openai.py`, `llm/llama_swap.py`, `llm/__init__.py`
-- **Cites:** docs/architecture/interfaces.md § Exposed: warnings
+- **Lands in:** `llm/exceptions.py`, `llm/openai.py`, `llm/llama_swap.py`, `llm/__init__.py`
+- **Cites:** docs/architecture/interfaces.md § Exposed: warnings; DEC-003-5; DEC-003-6
 
 ### DEC-arch-7 — Responses request: not stored, encrypted reasoning included, summary on OpenAI
 - **Status:** accepted
@@ -80,21 +80,23 @@ Decisions taken with the user while adding the Responses protocol to the OpenAI-
 - **Cites:** docs/architecture/subsystems.md § Chat protocols; docs/architecture/interfaces.md § Consumed: backend APIs
 
 ### DEC-arch-8 — Responses settings mapping
-- **Status:** accepted (two sub-points open, settled in planning; see Decision)
+- **Status:** accepted
 - **Stage:** — · **Feature:** — (arch-responses-protocol) · **Step:** —
-- **Date:** 2026-11-07 · **Decided by:** user
+- **Date:** 2026-11-07 (sub-points settled 2026-11-07, flipped at finalization 2026-11-08) · **Decided by:** user
 - **Question:** Which settings does a Responses request send, and how are they named on the wire?
 - **Decision:**
   - Only settings the app set are sent. The Responses classes have no always-sent built-in values, so DEC-000-6 does not apply to them; it still applies to the chat-completions classes.
   - `max_tokens` is sent as `max_output_tokens`.
   - Thinking on → `reasoning.effort`; an explicit effort set by the app wins.
-  - Thinking off → the lowest effort the model allows. *Open:* the exact value for each model is settled in planning and checked by live tests. There is no retry with another value, because retries are a non-goal.
+  - Thinking off → the lowest effort the model allows: `none`, unless the app gives an effort itself (settled by DEC-003-1, checked by live tests). There is no retry with another value, because retries are a non-goal.
   - A setting with no Responses counterpart is ignored with the warning in DEC-arch-6.
-  - *Open:* how thinking on/off reaches the engine on the llama-swap Responses class is settled in planning, with a live check.
+  - On the llama-swap Responses class, thinking on/off and an explicit effort reach the engine through `reasoning.effort`, as on OpenAI, without the reasoning summary (settled by DEC-003-2, with a live check).
+  - The full key-by-key table is DEC-003-9.
 - **Reason:** The user wants only what the app set to be sent (the fix asked for in DEC-000-6). The field names follow the Responses wire format.
 - **Rejected:** Retrying with another effort value when the model refuses one, because retries are out of scope.
+- **Amended:** 2026-11-08, at finalization — the two open sub-points (thinking-off value; how llama-swap receives thinking) are closed by DEC-003-1 and DEC-003-2; status was "accepted (two sub-points open, settled in planning)".
 - **Lands in:** the supported-settings tables and merge post-processing in `llm/openai.py`, `llm/llama_swap.py`
-- **Cites:** docs/architecture/subsystems.md § Options layer; docs/architecture/data-model.md § Settings; DEC-000-6, DEC-000-19
+- **Cites:** docs/architecture/subsystems.md § Options layer; docs/architecture/data-model.md § Settings; DEC-000-6, DEC-000-19; DEC-003-1; DEC-003-2; DEC-003-9
 
 ### DEC-arch-9 — Reasoning carry-over between tool rounds
 - **Status:** accepted

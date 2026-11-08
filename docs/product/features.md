@@ -15,11 +15,9 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - One client may serve several calls at the same time.
   - The time limit set when building the client applies to each request to the server, including a whole streamed reply; there is no per-call limit.
   - A client built directly without an address uses the backend's usual address; the library's single entry point always requires an address.
-- **Delivered:** legacy
+- **Delivered:** legacy; 001.core-fixes (2026-11-07)
 - **Realized by:** UC-001; US-001, US-002, US-003, US-004, US-005, US-029, US-047
 - **Gap:**
-  - _TBD: defect — the library must load after a normal install, without development extras_
-  - _TBD: defect — today a credential the app provides for OpenAI through the library's single entry point is not used, and the library reads a credential from its own environment instead (which it would also send to any other address the client points at) — must be fixed_
   - _TBD: choosing the deprecated Ollama backend should tell the developer it is deprecated — not yet supported_
   - _TBD: a client used without a usage scope should also release its connection to the server — not yet supported (today only closing the usage scope releases it)_
 - **Source:**
@@ -39,12 +37,11 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 - **Rule:**
   - The app's conversation is never changed by a call.
   - An empty system instruction counts as none.
-- **Delivered:** legacy
+- **Delivered:** legacy; 001.core-fixes (2026-11-07)
 - **Realized by:** UC-002; US-006, US-007, US-008, US-009, US-010, US-011
 - **Gap:**
-  - _TBD: defect — a reply with no content must reach the app as empty text, streamed or not; today a non-streamed one comes back as nothing, and with tracing on the call fails_
+  - _TBD: defect — on the deprecated Ollama a non-streamed reply with no content still comes back as nothing, and with tracing on the call fails_
   - _TBD: an empty conversation should be refused before the server is contacted — not yet supported_
-  - _TBD: defect — an unreachable server or an exceeded time limit should be reported as the library's own error; today it surfaces as a transport error_
 - **Source:**
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
   - Rules and gaps: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
@@ -70,12 +67,10 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - If the receiver fails, the stream stops and the call ends with that failure.
   - A streamed tool conversation gives the receiver every round's text and reasoning; the call returns only the final answer.
   - JSON-only answers are not streamed (out of scope).
-- **Delivered:** legacy
+- **Delivered:** legacy; 001.core-fixes (2026-11-07); Responses protocol: 003.responses-chat (2026-11-08)
 - **Realized by:** UC-005; US-008, US-013, US-021, US-022, US-023, US-024, US-036, US-062
 - **Gap:**
   - _TBD: apps need a stream they can consume incrementally and stop early, with answer text, reasoning and tool-call fragments as separate parts — not yet supported_
-  - _TBD: defect — an error the server sends inside a stream, or a stream that ends early for a reason other than the app's own output length limit, must be reported as an error; today the app gets partial or empty text silently — to be met on the Responses protocol (FEAT-014); open for chat completions_
-  - _TBD: defect — streamed text must arrive complete: non-English characters and replies from servers that end lines differently or split one piece over several lines currently lose text_
 - **Source:**
   - `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
   - Defect gap: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
@@ -93,20 +88,20 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - A streamed plain chat returns the reasoning together with the answer, exactly as streamed.
   - Within one tool conversation the library sends each round's reasoning back to the server when the protocol needs it (Responses); reasoning never enters the app's conversation; finished history carries answers only; the call returns the final answer without reasoning. On chat completions earlier reasoning the server reports separately is not sent back. Reasoning the server writes directly into the answer text is returned and sent back as part of the answer (accepted).
   - When thinking is on, the library asks for the reasoning the server offers (on OpenAI: its reasoning summary).
-- **Delivered:** legacy
+- **Delivered:** legacy; 001.core-fixes (2026-11-07); Responses protocol: 003.responses-chat (2026-11-08), 004.responses-tools (2026-11-08)
 - **Realized by:** UC-006; US-025, US-026, US-027, US-028, US-058, US-059
 - **Gap:**
-  - _TBD: reasoning delivered separately from the answer text while streaming (today both arrive mixed in one stream of text) — not yet supported — to be met on the Responses protocol (FEAT-014); open for chat completions_
-  - _TBD: defect — turning thinking off on OpenAI must ask for the lowest reasoning effort; today it sends nothing and a reasoning model still reasons — to be met on the Responses protocol (FEAT-014); open for chat completions_
-  - _TBD: llama-swap should pass an explicit reasoning effort to the server — not yet supported — to be met on the Responses protocol (FEAT-014); open for chat completions_
-  - _TBD: verify that turning thinking off on llama-swap actually stops reasoning — unverified_
-  - _TBD: defect — in a streamed plain chat, a piece that carries both reasoning and answer text loses the answer text_
+  - _TBD: reasoning delivered separately from the answer text while streaming — met on the Responses protocol (default, FEAT-014); open on chat completions only, where both arrive mixed in one stream of text_
+  - _TBD: defect — turning thinking off on OpenAI must stop the model reasoning — met on the Responses protocol (the server is asked for no reasoning; a model that refuses ends the call with the server's reason; the app may pass its own effort); open on chat completions only, where nothing is sent and a reasoning model still reasons_
+  - _TBD: llama-swap should pass an explicit reasoning effort to the server — met on the Responses protocol; open on chat completions only_
+  - _TBD: verify that turning thinking off on llama-swap actually stops reasoning — verified on the Responses protocol; unverified on chat completions_
 - **Source:**
   - `[confirmed: user]` interview "2026-11-07 — Vision discussion" (signal 4); "2026-11-07 — Consumer-example round"
   - Rules (marked off, streamed chat returns reasoning) and gaps: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - Tool-conversation rule (separate reasoning): behaviour per deep-docs notes I-05
   - Tool-conversation exception (server-inlined reasoning returned and re-sent): `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07) (not selected as a defect)
   - Reasoning sent back within a tool conversation on Responses, reasoning asked for when thinking is on, gaps met on Responses: `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+  - Thinking-off gap as met on Responses (no reasoning asked; refusing model fails with the server's reason; app may pass its own effort): `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08); gaps met on Responses per sweep 003.responses-chat
 
 ### FEAT-006 — Get JSON-only answers
 - **Purpose:** Ask for an answer that is JSON only; invalid JSON is reported as an error when the reply is checked. · **Actors:** ACT-001, ACT-002 · **Priority:** must
@@ -115,12 +110,12 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - The JSON-only answer is returned as the text received.
   - On llama-swap and OpenAI the reply is checked to be JSON only when the developer gives an expected shape; the deprecated Ollama always checks.
   - JSON-only answers are not streamed.
-- **Delivered:** legacy
-- **Realized by:** UC-008; US-038, US-039, US-040
-- **Gap:**
-  - _TBD: gap — an expected shape should be sent to the server so the model is held to it, where the backend supports it_
-  - _TBD: defect — a valid JSON reply that is a single value is wrongly reported as not JSON when an expected shape with fields is given (OpenAI)_
+  - When the app sets a response format as a setting, a JSON-only answer requests that format; otherwise it requests plain JSON.
+- **Delivered:** legacy; 001.core-fixes (2026-11-07); 002.edge-fixes (2026-11-07); Responses protocol: 003.responses-chat (2026-11-08)
+- **Realized by:** UC-008; US-038, US-039, US-040, US-063
+- **Gap:** _TBD: gap — an expected shape should be sent to the server so the model is held to it, where the backend supports it_
 - **Source:**
+  - Response-format rule: `[confirmed: user]` interview "finalize batch-2026-11-08 — extension 001/002" (2026-11-08)
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
   - Check only with a shape (keep), expected-shape gap: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - Single-value defect: `[confirmed: user]` Wave 5 — "drop the dead loop" (removes the single-value misreport)
@@ -137,13 +132,12 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - A tool conversation has a per-call round limit as a safety guard.
   - A requested answer format applies to every round of the conversation.
   - The final answer is not checked against the requested format (accepted).
-- **Delivered:** legacy
+  - "Offered" means described to the model; a function supplied without being described is not offered.
+- **Delivered:** legacy; 002.edge-fixes (2026-11-07); Responses protocol: 004.responses-tools (2026-11-08)
 - **Realized by:** UC-007; US-023, US-027, US-030, US-031, US-032, US-033, US-034, US-035, US-037, US-058
 - **Gap:**
   - _TBD: the app can observe each tool call and its result as it happens — not yet supported_
-  - _TBD: defect — when the round limit is reached, the error must say the round limit was the reason_
-  - _TBD: defect — a request for a tool that was not offered, argument text that cannot be read, or a tool result that cannot be turned into text must end with the library's error_
-  - _TBD: defect — tool requests streamed without position numbers or with a repeated name must still run as separate, correct calls_
+  - _TBD: the deprecated Ollama client keeps its old behaviour for unoffered tools, unreadable arguments and unserialisable results (defect, observation-only)_
 - **Source:**
   - `[confirmed: user]` interview "2026-11-07 — Vision discussion" (signal 3); "2026-11-07 — Consumer-example round"
   - Rules (failing tool ends the call, round limit as safety guard, format on every round, final answer not validated) and defect gaps: `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
@@ -156,12 +150,9 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Only vectors are returned.
   - Generation settings are not sent with embedding requests.
   - An end-user identifier set on the client or the call reaches the server, the call's value winning; a call cannot clear the client's identifier (accepted).
-- **Delivered:** legacy
+- **Delivered:** legacy; 002.edge-fixes (2026-11-07)
 - **Realized by:** UC-009; US-041, US-042, US-043
-- **Gap:**
-  - _TBD: defect — a batch must give exactly one vector per text, in the texts' order, or end with the library's error_
-  - _TBD: gap — an empty batch should return an empty result without contacting the server_
-  - _TBD: defect — a malformed embedding reply must end with the library's error_
+- **Gap:** _TBD: gap — an empty batch should return an empty result without contacting the server_
 - **Source:**
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"
   - Only vectors: `[confirmed: user]` interview "2026-11-07 — Vision discussion" (non-goal 2)
@@ -174,11 +165,9 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 - **Rule:**
   - Model names are available on every backend; full descriptions on llama-swap and OpenAI only.
   - Listing does not depend on the client's model.
-- **Delivered:** legacy
+- **Delivered:** legacy; 002.edge-fixes (2026-11-07)
 - **Realized by:** UC-010; US-044, US-045, US-046
-- **Gap:**
-  - _TBD: a reachability / credential check that reports its outcome (reachable, unreachable, credential refused, no models) instead of failing — not yet supported_
-  - _TBD: defect — a model list entry without a name, or an unreadable reply, must end with the library's error_
+- **Gap:** _TBD: a reachability / credential check that reports its outcome (reachable, unreachable, credential refused, no models) instead of failing — not yet supported_
 - **Source:**
   - `[confirmed: user]` interview "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"
   - Defect gap: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
@@ -193,18 +182,18 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Unknown or unsupported settings are ignored without error, so the same settings work on every backend.
   - Each backend accepts its own alternative names for some settings.
   - A reply cut short by an output length limit the app set is a normal result: the text produced is returned, without an error and without a separate notice. A reply stopped for length when the app set no limit is an error.
-- **Delivered:** legacy
+- **Delivered:** legacy; 001.core-fixes (2026-11-07); output length limit on Responses: 003.responses-chat (2026-11-08), 004.responses-tools (2026-11-08)
 - **Realized by:** UC-004; US-014, US-015, US-016, US-017, US-018, US-019, US-020, US-062
 - **Gap:**
-  - _TBD: defect — a reply cut short by the app's own output length limit must be returned as text; today on OpenAI's Responses protocol the call ends with an error_
+  - Accepted gap: on llama-swap a reply stopped for length is reported by the server as complete, so with no output length limit set the text is returned instead of an error (US-062.AC-6).
   - _TBD: llama-swap should also accept top-k, min-p and repeat-penalty controls, sent only when the app sets them; today they are silently ignored_
-  - _TBD: defect — only settings the app set should be sent; today the library sends its own values for several settings, overriding the server's or model's presets_
-  - _TBD: defect — stop sequences, token bias, end-user identifier and response format, which the library offers as settings, must reach the server; today they are silently ignored_
+  - _TBD: defect — on the deprecated Ollama, the library still sends its own values for several settings the app never set, and still ignores its extra offered settings_
 - **Source:**
   - Base feature, llama-swap controls gap: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (llama-swap bullet); "2026-11-07 — Phase 3 Step 3 confirmation round"; "2026-11-07 — Consumer-example round"; "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (send only what is set)
   - Rules ("nothing", unknown ignored, alternative names) and defect gaps: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
   - Precedence (call > client default > library value): behaviour per deep-docs notes I-10
-  - Rule (output length limit cut-off is a normal result), defect gap: `[confirmed: user]` interview "Delta — token-cap cut-off" and "challenges — token-cap cut-off" (2026-11-08)
+  - Rule (output length limit cut-off is a normal result): `[confirmed: user]` interview "Delta — token-cap cut-off" and "challenges — token-cap cut-off" (2026-11-08)
+  - Accepted llama-swap gap; rule unchanged: `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08)
 
 ### FEAT-011 — Trace every LLM interaction
 - **Purpose:** Turn on, through the environment, a readable per-call record of prompts, requests, streamed pieces, tool calls and results, answers and errors, as a debugging aid. · **Actors:** ACT-001 · **Priority:** must
@@ -215,13 +204,9 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - The access credential is never written to a record; a credential embedded in the server address or echoed in a server reply is not covered (accepted).
   - Tracing must never change a call's outcome.
   - A call with an empty system instruction still gets a system section in its record (accepted).
-- **Delivered:** legacy
+- **Delivered:** legacy; 002.edge-fixes (2026-11-07)
 - **Realized by:** UC-011; US-048, US-049, US-050, US-051, US-052
-- **Gap:**
-  - _TBD: defect — a call must go ahead untraced when its record cannot be written_
-  - _TBD: defect — calls running at the same time must each get their own record_
-  - _TBD: defect — a failure to write the record must not hide the call's own error_
-  - _TBD: defect — the system instruction appears once in a record_
+- **Gap:** none.
 - **Source:**
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (operator = developer); "2026-11-07 — Vision discussion" (signal 5)
   - Debugging-aid role, never changes a call's outcome, defect gaps, accepted empty-instruction section, accepted credential scope, supported trace facility: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
@@ -236,11 +221,9 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Unknown slots and slots written with spaces stay as written, silently.
   - A value that is not text appears in its text form; an empty value appears as the word "None".
   - Repeated filling (a slot inside a value is filled in turn) and computed values are part of the feature.
-- **Delivered:** legacy
+- **Delivered:** legacy; 002.edge-fixes (2026-11-07)
 - **Realized by:** UC-012; US-053, US-054, US-055
-- **Gap:**
-  - _TBD: gap — repeated filling is not offered from the library's top level_
-  - _TBD: defect — repeated filling keeps working after nothing more can be filled_
+- **Gap:** _TBD: gap — repeated filling is not offered from the library's top level_
 - **Source:**
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round"
   - Repeated filling and computed values in scope, top-level gap, unknown/spaced slots stay, "None" for empty (keep), defect gap: `[confirmed: user]` interview "Wave 6 — FEAT-012 templates (batched, 2026-11-07)"
@@ -253,7 +236,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 
 ### FEAT-014 — Choose the server's chat protocol
 - **Purpose:** The app chooses, when building a client, which chat protocol the client speaks with the server — the Responses protocol (default) or chat completions (kept for compatibility with servers that do not offer Responses). · **Actors:** ACT-001, ACT-002 · **Priority:** must
-- **Status:** planned
+- **Status:** delivered
 - **Rule:**
   - The protocol is chosen by the app when building the client; it is never guessed from the address and the library never switches on its own.
   - The default is the Responses protocol. Chat completions is kept only for servers that do not offer Responses (accepted: a client built without a choice against such a server fails after upgrading — intended).
@@ -262,18 +245,21 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Each chat operation gives the app the same kind of result on both protocols.
   - A setting with no counterpart on the Responses protocol is ignored and the developer is told.
   - By default the library asks the provider not to keep the conversation; this is a preference, not a guarantee.
+- **Delivered:** 003.responses-chat (2026-11-08), 004.responses-tools (2026-11-08)
 - **Realized by:** UC-013; US-056, US-057, US-058, US-059, US-060, US-061
 - **Gap:** none.
-- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07); delivery: sweeps 003.responses-chat and 004.responses-tools (2026-11-08)
 
 ## Cross-feature rules
 
 - A failure is reported on the call that hit it.
 - The library's own error carries the server's reason, including the server's reply text, and never a credential.
-- A failure while streaming and a malformed reply may surface as other kinds of error (accepted, chat completions only; on Responses a failure the server reports inside a stream is the library's error with the server's reason — FEAT-014).
-- Unreachable server or exceeded time limit: see the FEAT-002 gap.
+- A failure the server reports inside a stream, an unreachable server and an exceeded time limit are the library's own error with the server's reason, on every backend; a stream that ends early is the library's own error; so is a malformed reply on a listing or embedding call.
+- A malformed chat reply may surface as another kind of error (accepted, chat completions only).
 - **Source:**
   - `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
   - Amended streaming rule (Responses): `[confirmed: user]` interview "challenges — Responses delta" (2026-11-07), C3
+  - Amended to what shipped: sweeps 001.core-fixes and 002.edge-fixes (2026-11-08)
+  - Streamed refusal now the library's error with the server's reply (accepted exception narrowed to a malformed chat reply): delivery 001.core-fixes (2026-11-07)
 </auto-generated>
 <!-- product-spec:end -->

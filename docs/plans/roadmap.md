@@ -9,8 +9,8 @@ All features are multi-step so they can be planned by `/planner` and built with 
 
 | Feature | Track | Size | Delivers | Depends on | Definition |
 |---|---|---|---|---|---|
-| `001.core-fixes` | multi-step | M | FEAT-001, FEAT-002, FEAT-004, FEAT-005, FEAT-010 | — | Fix the shared request, stream and settings defects every chat call goes through. |
-| `002.edge-fixes` | multi-step | M | FEAT-006, FEAT-007, FEAT-008, FEAT-009, FEAT-011, FEAT-012 | `001.core-fixes` | Fix defects at the edges of single operations: tool loop, JSON, embeddings, model list, tracing, templates. |
+| 001.core-fixes — delivered 2026-11-07 | multi-step | M | FEAT-001, FEAT-002, FEAT-004, FEAT-005, FEAT-010 | — | Fix the shared request, stream and settings defects every chat call goes through. |
+| 002.edge-fixes — delivered 2026-11-07 | multi-step | M | FEAT-006, FEAT-007, FEAT-008, FEAT-009, FEAT-011, FEAT-012 | `001.core-fixes` | Fix defects at the edges of single operations: tool loop, JSON, embeddings, model list, tracing, templates. |
 
 ## Stage 002 — responses
 **Goal:** the library speaks the Responses protocol by default on OpenAI and llama-swap, with chat completions kept as a named compatibility choice (FEAT-014).
@@ -19,6 +19,6 @@ All features are multi-step so they can be planned by `/planner` and built with 
 
 | Feature | Track | Size | Delivers | Depends on | Definition |
 |---|---|---|---|---|---|
-| `003.responses-chat` | multi-step | L | FEAT-014, FEAT-005 | `001.core-fixes` | Protocol choice at client build, Responses by default; chat, generate and JSON-only on Responses. |
-| `004.responses-tools` | multi-step | M | FEAT-014, FEAT-005, FEAT-007 | `003.responses-chat`, `002.edge-fixes` | Tool conversations on Responses, with per-call reasoning carry-over. |
+| 003.responses-chat — delivered 2026-11-08 | multi-step | L | FEAT-014, FEAT-005 | `001.core-fixes`, `002.edge-fixes` | Protocol choice at client build, Responses by default; chat, generate and JSON-only on Responses. |
+| 004.responses-tools — delivered 2026-11-08 | multi-step | M | FEAT-014, FEAT-005, FEAT-007, FEAT-010 | `003.responses-chat`, `002.edge-fixes` | Tool conversations on Responses, with per-call reasoning carry-over. |
 <!-- roadmap:end -->

@@ -25,11 +25,10 @@ methods and settings keys. A class never switches protocol on its own, and the a
 > To keep the previous chat-completions behaviour, use `OpenAIChatCompletionsClient` /
 > `LlamaSwapChatCompletionsClient` or pass `protocol="chat_completions"` to the factory.
 
-> **Interim limitation:** tool conversations (`chat_with_tools`) are not available yet on the Responses classes.
-> `OpenAIAPIClient.chat_with_tools` / `LlamaSwapAPIClient.chat_with_tools` raise `NotImplementedError` before
-> sending anything, naming the chat-completions class to use meanwhile; they never fall back to
-> `/chat/completions`. Use `OpenAIChatCompletionsClient` / `LlamaSwapChatCompletionsClient` for tool calling
-> until Responses tool support lands.
+Tool conversations (`chat_with_tools`) run on both protocols. On the Responses classes they go over
+`/responses`, streamed and not; the reasoning of each round is carried to the later rounds of the same call
+(never into the caller's conversation or the answer), and `response_format` is accepted and translated to the
+protocol's text-format setting. The chat-completions classes remain the alternative protocol for tool calling.
 
 ## Installation
 
@@ -139,8 +138,8 @@ json_str = await client.chat_json([
 
 ### Tool Calling
 
-On OpenAI and llama-swap, use the chat-completions classes for tool calling for now; the Responses classes
-refuse `chat_with_tools` with `NotImplementedError` (see [Protocols](#protocols)).
+On OpenAI and llama-swap, `chat_with_tools` works on both the Responses classes and the chat-completions
+classes, streamed and not (see [Protocols](#protocols)).
 
 ```python
 def get_weather(city: str) -> dict:
@@ -216,7 +215,9 @@ reply = await client.chat_with_tools(
 
 | Backend | `json_object` | `json_schema` | Notes |
 | --------- | :-----------: | :-----------: | ------- |
+| OpenAI (`OpenAIAPIClient`, Responses) | Yes | Yes | Same `response_format` shape, translated to the Responses text format |
 | OpenAI (`OpenAIChatCompletionsClient`) | Yes | Yes | Full support |
+| llama-swap (`LlamaSwapAPIClient`, Responses) | Yes | Yes | Same `response_format` shape, translated to the Responses text format; depends on underlying engine (vLLM, llama.cpp) |
 | llama-swap (`LlamaSwapChatCompletionsClient`) | Yes | Yes | Depends on underlying engine (vLLM, llama.cpp) |
 | Ollama | Yes | -- | Translated to `format="json"` internally |
 
@@ -273,14 +274,16 @@ llm/
   exceptions.py     # LLMError exception, LLMSettingIgnoredWarning category
   message.py        # LLMMessage TypedDict
   options.py        # BaseLLMOptions, OllamaOptions, OpenAIOptions
-  llm_client.py     # Abstract base class (LLMClient)
+  llm_client.py     # Shared base class (LLMClient): HTTP/SSE plumbing, options merge; no abc
   ollama.py         # OllamaAPIClient
   openai.py         # OpenAIAPIClient (Responses)
   openai_chat_completions.py      # OpenAIChatCompletionsClient (Chat Completions)
   llama_swap.py     # LlamaSwapAPIClient (Responses)
   llama_swap_chat_completions.py  # LlamaSwapChatCompletionsClient (Chat Completions)
+  tools.py          # pydantic_to_openai_tool helper
   trace.py          # LLMTracer — debug trace logging
   llm.py            # Factory (get_llm_client) + utilities
+  py.typed          # PEP 561 typing marker
 ```
 
 ## Environment Variables

@@ -29,17 +29,18 @@
 
 ### US-003 — OpenAI needs a credential from the app
 - **Feature:** FEAT-001 · **Actor:** ACT-001 · **Realizes:** UC-001 (A3, E2)
-- **Status:** delivered with defect — AC-1, AC-2 and AC-4 are not met today (see the FEAT-001 defect gap); AC-3 is met
+- **Status:** delivered
 - **Story:** As an application developer, I want the OpenAI client to use the credential my app provides, so that no credential reaches a server from a source my app does not control.
 - **Acceptance criteria:**
   - **US-003.AC-1** — Given a credential provided by the app, when the developer builds an OpenAI client, then the server receives that credential.
   - **US-003.AC-2** — Given no credential provided, when the developer builds an OpenAI client, then it is refused with a message telling the developer to provide one.
   - **US-003.AC-3** — Given the refusal in AC-2, when the message is shown, then it contains no credential value.
   - **US-003.AC-4** — Given a credential in the developer's environment and none provided by the app, when the developer builds an OpenAI client, then it is refused; the library never takes a credential from the environment on its own.
-- **Delivered:** legacy
+- **Delivered:** 001.core-fixes (2026-11-07) (AC-1, AC-2, AC-4); legacy (AC-3)
 - **Source:**
   - AC-1, AC-2, AC-4: `[confirmed: user]` interview "I-01 — wave-1 checkpoint (CORRECTION)" (2026-11-07)
   - AC-3: behaviour per deep-docs notes I-01
+  - Delivery: sweep 001.core-fixes (2026-11-08)
 
 ### US-004 — Release connections when done
 - **Feature:** FEAT-001 · **Actor:** ACT-001 · **Realizes:** UC-001 (step 3, A1)
@@ -97,14 +98,14 @@
 
 ### US-009 — A reply with no content is empty text
 - **Feature:** FEAT-002 · **Actor:** ACT-001 · **Realizes:** UC-002 (E4)
-- **Status:** delivered with defect — AC-1 and AC-3 are not met; AC-2 is met
+- **Status:** delivered on OpenAI and llama-swap, including a tool conversation's final answer; unchanged on the deprecated Ollama (AC-1 and AC-3 not met there)
 - **Story:** As an application developer, I want a reply with no content to arrive as empty text, so that my app handles one case, streamed or not.
 - **Acceptance criteria:**
   - **US-009.AC-1** — Given a non-streamed reply with no content, when the developer chats, then the developer receives empty text.
   - **US-009.AC-2** — Given a streamed reply with no content, when the developer chats, then the developer receives empty text.
   - **US-009.AC-3** — Given tracing is on and a reply has no content, when the developer chats, then the call returns.
-- **Delivered:** legacy
-- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+- **Delivered:** 001.core-fixes (2026-11-07) (OpenAI, llama-swap); legacy (AC-2)
+- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07); delivery: sweep 001.core-fixes (2026-11-08)
 
 ### US-010 — An empty conversation or prompt is refused
 - **Feature:** FEAT-002, FEAT-003 · **Actor:** ACT-001 · **Realizes:** UC-002 (E5), UC-003 (E2)
@@ -117,17 +118,18 @@
 
 ### US-011 — Server failures are reported
 - **Feature:** FEAT-002 · **Actor:** ACT-001 · **Realizes:** UC-002 (E1–E3)
-- **Status:** delivered with defect — AC-3 is not met
+- **Status:** delivered
 - **Story:** As an application developer, I want every failure reported on the call that hit it, so that my app can react.
 - **Acceptance criteria:**
   - **US-011.AC-1** — Given the server refuses or fails, when the developer chats (streamed or not), then the call ends with an error.
   - **US-011.AC-2** — Given a non-streamed failure, when the developer chats, then the library's error carries the server's reason and reply text.
   - **US-011.AC-3** — Given an unreachable server or an exceeded time limit, when the developer chats, then the call ends with the library's own error.
   - **US-011.AC-4** — Given a non-streamed failure, when the developer chats, then the error contains no credential value.
-- **Delivered:** legacy
+- **Delivered:** 001.core-fixes (2026-11-07) (AC-3, every backend including the deprecated Ollama); legacy (AC-1, AC-2, AC-4)
 - **Source:**
-  - AC-3 (defect), AC-2 and AC-4 (reason and reply text, no credential): `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - AC-3, AC-2 and AC-4 (reason and reply text, no credential): `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
   - AC-1: behaviour per deep-docs notes I-24
+  - Delivery: sweep 001.core-fixes (2026-11-08)
 
 ### US-012 — Generate a reply from one prompt
 - **Feature:** FEAT-003 · **Actor:** ACT-001 · **Realizes:** UC-003
@@ -192,19 +194,21 @@
 
 ### US-018 — Only the app's settings are sent
 - **Feature:** FEAT-010 · **Actor:** ACT-001 · **Realizes:** UC-004 (note)
-- **Status:** not met (defect) — today the library sends its own values for several settings
+- **Status:** delivered with modification — met on OpenAI and llama-swap; the deprecated Ollama client still sends its own values
 - **Story:** As an application developer, I want only my settings sent, so that the server's or model's presets apply to the rest.
 - **Acceptance criteria:**
-  - **US-018.AC-1** — Given no settings from the app, when the developer calls, then the request carries no generation settings, so the server's or model's presets apply.
-- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - **US-018.AC-1** — Given no settings from the app, when the developer calls an OpenAI or llama-swap client, then the request carries no generation settings, so the server's or model's presets apply.
+- **Delivered:** 001.core-fixes (2026-11-07)
+- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07); modification (Ollama excluded): sweep 001.core-fixes (2026-11-08)
 
 ### US-019 — Offered settings reach the server
 - **Feature:** FEAT-010 · **Actor:** ACT-001 · **Realizes:** UC-004
-- **Status:** not met (defect) — today these settings are silently ignored
+- **Status:** delivered on OpenAI and llama-swap; the deprecated Ollama client still ignores its extra offered settings
 - **Story:** As an application developer, I want every setting the library offers to reach the server, so that setting it has an effect.
 - **Acceptance criteria:**
-  - **US-019.AC-1** — Given stop sequences, token bias or an end-user identifier set by the app, when the developer calls, then the server receives them.
-- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
+  - **US-019.AC-1** — Given stop sequences, token bias, an end-user identifier or a response format set by the app, when the developer calls an OpenAI or llama-swap client, then the server receives them.
+- **Delivered:** 001.core-fixes (2026-11-07)
+- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07); AC-1 amended to what shipped (response format added, Ollama excluded): sweep 001.core-fixes (2026-11-08)
 
 ### US-020 — llama-swap sampling controls
 - **Feature:** FEAT-010 · **Actor:** ACT-001 · **Realizes:** UC-004
@@ -254,32 +258,36 @@
 
 ### US-024 — Failures inside a stream are reported
 - **Feature:** FEAT-004 · **Actor:** ACT-001 · **Realizes:** UC-005 (E3)
-- **Status:** not met (defect) — today the app gets partial or empty text silently
+- **Status:** delivered on both protocols
 - **Story:** As an application developer, I want a stream broken by something I did not cause reported as an error, so that I never mistake partial text from a failure for a complete reply.
 - **Acceptance criteria:**
   - **US-024.AC-1** — Given the server sends an error inside the stream, when the developer streams, then the call ends with an error.
   - **US-024.AC-2** — Given the stream ends before the reply is complete, for a reason other than the output length limit the app set, when the developer streams, then the call ends with an error.
-- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07); AC-2 narrowed: interview "Delta — token-cap cut-off" (2026-11-08); narrowed story text: `[confirmed: user]` interview "challenges — token-cap cut-off" C1 (2026-11-08)
+- **Delivered:** chat completions: 001.core-fixes (2026-11-07); Responses protocol: 003.responses-chat (2026-11-08)
+- **Source:** `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07); delivery on chat completions: sweep 001.core-fixes (2026-11-08); AC-2 narrowed: interview "Delta — token-cap cut-off" (2026-11-08); narrowed story text: `[confirmed: user]` interview "challenges — token-cap cut-off" C1 (2026-11-08)
 
 ### US-025 — Turn reasoning on or off
 - **Feature:** FEAT-005 · **Actor:** ACT-001 · **Realizes:** UC-006 (step 1, A6, A7)
-- **Status:** delivered with defect — AC-2 unverified, AC-5 not met, AC-6 not delivered
+- **Status:** delivered on the Responses protocol (default; AC-2 verified live, AC-5 as amended by US-059.AC-3, AC-6 met); on chat completions delivered with defect — AC-2 unverified, AC-5 not met, AC-6 not delivered
 - **Story:** As an application developer, I want one thinking switch for every backend, so that I control reasoning the same way everywhere.
 - **Acceptance criteria:**
   - **US-025.AC-1** — Given a llama-swap client, when thinking is on, then the server is asked to reason.
-  - **US-025.AC-2** — Given a llama-swap client, when thinking is off, then the model does not reason (unverified).
+  - **US-025.AC-2** — Given a llama-swap client, when thinking is off, then the model does not reason (unverified on chat completions).
   - **US-025.AC-3** — Given an OpenAI client with thinking on and no effort given, when the developer calls, then the server is asked for its default reasoning effort.
   - **US-025.AC-4** — Given an OpenAI client and an explicit effort, when the developer calls, then the server receives that effort.
   - **US-025.AC-5** — Given an OpenAI client, when thinking is off, then the server is asked for the lowest reasoning effort.
   - **US-025.AC-6** — Given a llama-swap client and an explicit effort, when the developer calls, then the server receives it.
-- **Delivered:** legacy (AC-1, AC-3, AC-4)
+  - Exception (accepted): on the Responses protocol AC-5 reads as US-059.AC-3 — thinking off asks for no reasoning; a refusing model fails with the server's reason; the app may pass its own effort.
+- **Delivered:** legacy (AC-1, AC-3, AC-4); Responses protocol (AC-2, AC-5, AC-6): 003.responses-chat (2026-11-08)
 - **Source:**
   - AC-2, AC-5, AC-6: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - AC-1, AC-3, AC-4: behaviour per deep-docs notes I-05, I-16
+  - Exception (AC-5 on Responses reads as US-059.AC-3): `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08)
+  - Delivery on Responses (AC-2 verified live, AC-5, AC-6): sweep 003.responses-chat (2026-11-08)
 
 ### US-026 — See reasoning while streaming a chat
 - **Feature:** FEAT-005 · **Actor:** ACT-001 · **Realizes:** UC-006 (main, A1, A4, E2)
-- **Status:** delivered with defect — AC-5 not met
+- **Status:** delivered
 - **Story:** As an application developer, I want the model's reasoning marked off from its answer while streaming, so that I can show or hide it.
 - **Acceptance criteria:**
   - **US-026.AC-1** — Given thinking on and a receiver, when the model reasons then answers, then the receiver gets the reasoning as one marked block before the answer.
@@ -287,10 +295,11 @@
   - **US-026.AC-3** — Given a model that does not reason, when the developer streams, then no reasoning block appears.
   - **US-026.AC-4** — Given a streamed chat, when it completes, then the returned text equals what the receiver got, reasoning included.
   - **US-026.AC-5** — Given a piece that carries both reasoning and answer text, when the developer streams, then the receiver gets both.
-- **Delivered:** legacy (AC-1..AC-4)
+- **Delivered:** legacy (AC-1..AC-4); 001.core-fixes (2026-11-07) (AC-5)
 - **Source:**
   - AC-4, AC-5: `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - AC-1..AC-3: behaviour per deep-docs notes I-05
+  - AC-5 delivery: sweep 001.core-fixes (2026-11-08)
 
 ### US-027 — Reasoning in a streamed tool conversation
 - **Feature:** FEAT-005, FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-006 (A3)
@@ -371,38 +380,41 @@
 
 ### US-034 — The round limit stops an endless tool conversation
 - **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (A4, E3)
-- **Status:** delivered with defect — AC-3 not met
+- **Status:** delivered
 - **Story:** As an application developer, I want a limit on tool rounds, so that a model that keeps asking for tools cannot run forever.
 - **Acceptance criteria:**
   - **US-034.AC-1** — Given a model that keeps asking for tools, when the round limit is reached, then the call ends with an error.
   - **US-034.AC-2** — Given a model that keeps asking for tools, when the round limit is reached, then no partial answer is returned.
   - **US-034.AC-3** — Given the round limit is reached, when the call ends with an error, then the error says the round limit was the reason.
   - **US-034.AC-4** — Given a round limit set for one call, when the model keeps asking for tools, then the call ends with an error once that limit is reached.
-- **Delivered:** legacy (AC-1, AC-2, AC-4)
+- **Delivered:** legacy (AC-1, AC-2, AC-4); 002.edge-fixes (2026-11-07) (AC-3)
 - **Source:**
   - AC-3: `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
   - AC-1, AC-2, AC-4: behaviour per deep-docs notes I-29-I-30
+  - AC-3 delivery: sweep 002.edge-fixes (2026-11-08)
 
 ### US-035 — Unexpected tool requests end with the library's error
 - **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (E4, E5)
-- **Status:** not met (defect) — today these surface as raw program errors or broken calls
+- **Status:** delivered on OpenAI and llama-swap; the deprecated Ollama keeps its old behaviour
 - **Story:** As an application developer, I want odd model output reported as the library's error, so that I handle one kind of failure.
 - **Acceptance criteria:**
-  - **US-035.AC-1** — Given the model asks for a tool that was not offered, when the call runs, then the call ends with the library's error.
+  - **US-035.AC-1** — Given the model asks for a tool that was not offered (not described to the model; a function supplied without being described is not offered), when the call runs, then the call ends with the library's error.
   - **US-035.AC-2** — Given the model's argument text cannot be read, when the call runs, then the call ends with the library's error.
   - **US-035.AC-3** — Given a tool returns a result that cannot be turned into text for the model, when the call runs, then the call ends with the library's error.
   - **US-035.AC-4** — Given a server streams tool requests without position numbers or repeating the tool name, when the model asks for several tools, then each runs as its own call with its own name and arguments.
-- **Source:** `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07), all ACs
+- **Delivered:** 002.edge-fixes (2026-11-07)
+- **Source:** `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07), all ACs; delivery and "offered" wording: sweep 002.edge-fixes (2026-11-08)
 
 ### US-036 — Streamed text arrives complete
 - **Feature:** FEAT-004 · **Actor:** ACT-001 · **Realizes:** UC-005
-- **Status:** not met (defect) — today some streamed text is lost
+- **Status:** delivered
 - **Story:** As an application developer, I want every streamed character delivered, so that replies are never silently damaged.
 - **Acceptance criteria:**
   - **US-036.AC-1** — Given a reply with non-English characters, when it is streamed, then every character reaches the receiver.
   - **US-036.AC-2** — Given a server that ends its lines differently or splits one piece over several lines, when it streams, then no text is lost.
   - **US-036.AC-3** — Given a reply with non-English characters, when it is streamed, then every character is in the returned text.
-- **Source:** `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07), all ACs
+- **Delivered:** 001.core-fixes (2026-11-07)
+- **Source:** `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07), all ACs; delivery: sweep 001.core-fixes (2026-11-08)
 
 ### US-037 — Structured final answer from a tool conversation
 - **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (A5)
@@ -431,14 +443,15 @@
 
 ### US-039 — A non-JSON reply is reported when checked
 - **Feature:** FEAT-006 · **Actor:** ACT-001 · **Realizes:** UC-008 (A2, E1, E2, E3)
-- **Status:** delivered with defect — AC-3 not met
+- **Status:** delivered
 - **Story:** As an application developer, I want a non-JSON reply reported when I gave an expected shape, so that I never parse broken text.
 - **Acceptance criteria:**
   - **US-039.AC-1** — Given an expected shape on llama-swap or OpenAI, when the reply is not JSON, then the call ends with the library's error.
   - **US-039.AC-2** — Given no expected shape on llama-swap or OpenAI, when the reply is not JSON, then the reply is returned.
   - **US-039.AC-3** — Given an expected shape with fields on OpenAI, when the reply is a valid single JSON value, then the reply is returned.
-- **Delivered:** legacy (AC-1, AC-2)
+- **Delivered:** legacy (AC-1, AC-2); 002.edge-fixes (2026-11-07) (AC-3)
 - **Source:**
+  - AC-3 delivery: sweep 002.edge-fixes (2026-11-08)
   - AC-2: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - AC-3: `[confirmed: user]` Wave 5 — "drop the dead loop" (removes the single-value misreport)
   - AC-1: behaviour per deep-docs notes I-06-I-28
@@ -465,7 +478,7 @@
 
 ### US-042 — Embed a batch
 - **Feature:** FEAT-008 · **Actor:** ACT-001 · **Realizes:** UC-009 (main, E4, E6)
-- **Status:** delivered with defect — AC-2, AC-3 and AC-5 not met; AC-4 not delivered
+- **Status:** delivered except AC-4 (empty batch), still open
 - **Story:** As an application developer, I want the vectors of several texts in one call, so that I need not embed them one by one.
 - **Acceptance criteria:**
   - **US-042.AC-1** — Given several texts, when the developer asks for their vectors, then they are sent in one request.
@@ -473,22 +486,24 @@
   - **US-042.AC-3** — Given the server returns a different number of vectors than texts, when the developer asks for their vectors, then the call ends with the library's error.
   - **US-042.AC-4** — Given an empty batch, when the developer asks for vectors, then an empty result is returned without contacting the server.
   - **US-042.AC-5** — Given several texts, when the developer asks for their vectors, then the vectors come back in the texts' order.
-- **Delivered:** legacy (AC-1)
+- **Delivered:** legacy (AC-1); 002.edge-fixes (2026-11-07) (AC-2, AC-3, AC-5)
 - **Source:**
+  - AC-2, AC-3, AC-5 delivery: sweep 002.edge-fixes (2026-11-08)
   - AC-2, AC-3, AC-4, AC-5: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - AC-1: behaviour per deep-docs notes I-08-I-31
 
 ### US-043 — Embedding failures are reported
 - **Feature:** FEAT-008 · **Actor:** ACT-001 · **Realizes:** UC-009 (E1, E2, E5)
-- **Status:** delivered with defect — AC-3 and AC-4 not met
+- **Status:** delivered
 - **Story:** As an application developer, I want every embedding failure reported as the library's error, so that I handle one kind of failure.
 - **Acceptance criteria:**
   - **US-043.AC-1** — Given the server refuses, when the developer asks for vectors, then the call ends with the library's error carrying the server's reply.
   - **US-043.AC-2** — Given the reply has no vectors, when the developer asks for vectors, then the call ends with the library's error.
   - **US-043.AC-3** — Given a reply entry without a vector, when the developer asks for vectors, then the call ends with the library's error.
   - **US-043.AC-4** — Given an unreadable reply, when the developer asks for vectors, then the call ends with the library's error.
-- **Delivered:** legacy (AC-1, AC-2)
+- **Delivered:** legacy (AC-1, AC-2); 002.edge-fixes (2026-11-07) (AC-3, AC-4)
 - **Source:**
+  - AC-3, AC-4 delivery: sweep 002.edge-fixes (2026-11-08)
   - AC-3, AC-4: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - AC-1, AC-2: behaviour per deep-docs notes I-08-I-31
 
@@ -514,24 +529,26 @@
 
 ### US-046 — A malformed model list is reported
 - **Feature:** FEAT-009 · **Actor:** ACT-001 · **Realizes:** UC-010 (E2, E3)
-- **Status:** delivered with defect — AC-2 and AC-3 not met
+- **Status:** delivered
 - **Story:** As an application developer, I want a broken model list reported as the library's error, so that I handle one kind of failure.
 - **Acceptance criteria:**
   - **US-046.AC-1** — Given a llama-swap or OpenAI reply without a model list, when the developer asks for the server's models, then the call ends with the library's error.
   - **US-046.AC-2** — Given a reply entry without a name, when the developer asks for the server's models, then the call ends with the library's error.
   - **US-046.AC-3** — Given an unreadable reply, when the developer asks for the server's models, then the call ends with the library's error.
-- **Delivered:** legacy (AC-1)
+- **Delivered:** legacy (AC-1); 002.edge-fixes (2026-11-07) (AC-2, AC-3)
 - **Source:**
+  - AC-2, AC-3 delivery: sweep 002.edge-fixes (2026-11-08)
   - AC-2, AC-3: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - AC-1: behaviour per deep-docs notes I-09
 
 ### US-047 — The library loads after a normal install
 - **Feature:** FEAT-001 · **Actor:** ACT-001 · **Realizes:** UC-001
-- **Status:** not met (defect) — today loading needs development extras
+- **Status:** delivered
 - **Story:** As an application developer, I want the library to load after a normal install, so that my app needs nothing extra.
 - **Acceptance criteria:**
   - **US-047.AC-1** — Given the library installed without development extras, when the developer loads it, then it loads.
-- **Source:** `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
+- **Delivered:** 001.core-fixes (2026-11-07)
+- **Source:** `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07); delivery: sweep 001.core-fixes (2026-11-08)
 
 ### US-048 — Turn tracing on and off
 - **Feature:** FEAT-011 · **Actor:** ACT-001 · **Realizes:** UC-011 (main, A1, A2)
@@ -546,7 +563,7 @@
 
 ### US-049 — A record shows the whole exchange
 - **Feature:** FEAT-011 · **Actor:** ACT-001 · **Realizes:** UC-011 (main)
-- **Status:** delivered with defect — AC-6 not met
+- **Status:** delivered with modification — AC-6 as amended
 - **Story:** As an application developer, I want one record to show the whole exchange, so that investigating a call means opening one file.
 - **Acceptance criteria:**
   - **US-049.AC-1** — Given a traced call, when the call completes, then its record shows the operation.
@@ -554,7 +571,7 @@
   - **US-049.AC-3** — Given a plain streamed chat, when the call completes, then its record shows each streamed piece in order.
   - **US-049.AC-4** — Given a tool conversation, when the call completes, then its record shows each tool request with its arguments, under its round number.
   - **US-049.AC-5** — Given a traced call, when the call completes, then its record shows the final answer.
-  - **US-049.AC-6** — Given a traced call with a system instruction, when the call completes, then the instruction appears once in its record.
+  - **US-049.AC-6** — Given a traced call with a system instruction, when the call completes, then the instruction appears once among its record's instruction and conversation sections.
   - **US-049.AC-7** — Given a traced call using a credential, when the call completes, then the credential appears nowhere in its record.
   - **US-049.AC-8** — Given a traced call, when the call completes, then its record shows the model.
   - **US-049.AC-9** — Given a traced call, when the call completes, then its record shows the time.
@@ -563,32 +580,33 @@
   - **US-049.AC-12** — Given a tool conversation, when the call completes, then its record shows each tool result, under its round number.
   - **US-049.AC-13** — Given a traced embedding call, when the call completes, then its record shows how many vectors came back.
   - **US-049.AC-14** — Given an embedding call is traced, when its record is read, then the vectors themselves do not appear.
-- **Delivered:** legacy (all but AC-6)
+- **Delivered:** legacy (all but AC-6); 002.edge-fixes (2026-11-07) (AC-6)
 - **Source:**
-  - AC-6: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
+  - AC-6: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"; amended to what shipped: sweep 002.edge-fixes (2026-11-08)
   - AC-1..AC-5, AC-7..AC-14: behaviour per deep-docs notes I-11-I-32
 
 ### US-050 — A failing call is recorded and tracing never changes its outcome
 - **Feature:** FEAT-011 · **Actor:** ACT-001 · **Realizes:** UC-011 (E1, E2, E4)
-- **Status:** delivered with defect — AC-2 and AC-3 not met
+- **Status:** delivered
 - **Story:** As an application developer, I want tracing never to change what a call does, so that a broken trace folder cannot break my app.
 - **Acceptance criteria:**
   - **US-050.AC-1** — Given a traced call fails, when the call ends, then the record ends with the error.
   - **US-050.AC-2** — Given the folder cannot be written, when a call is made, then the call goes ahead without a record.
   - **US-050.AC-3** — Given writing the record fails while a call error is being recorded, when the call ends, then the app receives the call's own error.
   - **US-050.AC-4** — Given a traced call fails, when the call ends, then the app receives the same error as without tracing.
-- **Delivered:** legacy (AC-1, AC-4)
+- **Delivered:** legacy (AC-1, AC-4); 002.edge-fixes (2026-11-07) (AC-2, AC-3)
 - **Source:**
-  - AC-2, AC-3: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
+  - AC-2, AC-3: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"; delivery: sweep 002.edge-fixes (2026-11-08)
   - AC-1, AC-4: behaviour per deep-docs notes I-11-I-32
 
 ### US-051 — Calls at the same time get their own records
 - **Feature:** FEAT-011 · **Actor:** ACT-001 · **Realizes:** UC-011 (E3)
-- **Status:** not met (defect) — today one record can overwrite another
+- **Status:** delivered
 - **Story:** As an application developer, I want every call to keep its own record, so that parallel calls can all be investigated.
 - **Acceptance criteria:**
   - **US-051.AC-1** — Given several calls start at the same instant, when they complete, then each has its own complete record.
-- **Source:** `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
+- **Delivered:** 002.edge-fixes (2026-11-07)
+- **Source:** `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"; delivery: sweep 002.edge-fixes (2026-11-08)
 
 ### US-052 — Write own records with the library's trace facility
 - **Feature:** FEAT-011 · **Actor:** ACT-001 · **Realizes:** UC-011 (A3)
@@ -618,7 +636,7 @@
 
 ### US-054 — Fill slots that appear inside values
 - **Feature:** FEAT-012 · **Actor:** ACT-001 · **Realizes:** UC-012 (A2, E1, E3)
-- **Status:** delivered with defect — AC-3 not met; AC-4 not delivered
+- **Status:** delivered except AC-4 (top-level export), still open
 - **Story:** As an application developer, I want slots inside my values filled too, so that I can build prompts from nested parts.
 - **Acceptance criteria:**
   - **US-054.AC-1** — Given a value containing another slot, when the developer fills with repeated filling, then that slot is filled too.
@@ -626,8 +644,9 @@
   - **US-054.AC-3** — Given an unknown slot, when the developer fills with repeated filling, then filling stops as soon as nothing more can be filled.
   - **US-054.AC-4** — Given the library installed, when the developer looks for repeated filling at the library's top level, then it is available there.
   - **US-054.AC-5** — Given a slot that refers to itself, when filling ends, then no error reaches the developer.
-- **Delivered:** legacy (AC-1, AC-2, AC-5)
+- **Delivered:** legacy (AC-1, AC-2, AC-5); 002.edge-fixes (2026-11-07) (AC-3)
 - **Source:**
+  - AC-3 delivery: sweep 002.edge-fixes (2026-11-08)
   - AC-1, AC-2 (in scope, self-reference accepted), AC-3, AC-4, AC-5 (returns silently): `[confirmed: user]` interview "Wave 6 — FEAT-012 templates (batched, 2026-11-07)"
   - AC-1 behaviour: per deep-docs notes I-12-I-33
 
@@ -646,7 +665,7 @@
 
 ### US-056 — Choose the protocol when building a client
 - **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (main 1, A1, E0)
-- **Status:** planned
+- **Status:** delivered
 - **Story:** As an application developer, I want to choose the chat protocol when I build a client, so that it works with servers that do or do not offer Responses.
 - **Acceptance criteria:**
   - **US-056.AC-1** — Given no protocol named, when the developer builds an OpenAI or llama-swap client, then it speaks Responses.
@@ -654,20 +673,22 @@
   - **US-056.AC-3** — Given any address, when the developer builds a client, then the protocol is the one chosen (or the default), never derived from the address.
   - **US-056.AC-4** — Given a client, when the server refuses a request, then the library does not switch protocols on its own.
   - **US-056.AC-5** — Given an Ollama backend and an explicitly requested protocol, when the developer builds the client, then building is refused and the error says the choice is not offered on Ollama.
+- **Delivered:** 003.responses-chat (2026-11-08)
 - **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
 
 ### US-057 — Every chat operation works the same on both protocols
 - **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (main 2–3, A5)
-- **Status:** planned
+- **Status:** delivered
 - **Story:** As an application developer, I want every chat operation to give the same kind of result on either protocol, so that choosing a protocol changes nothing in my app.
 - **Acceptance criteria:**
   - **US-057.AC-1** — Given each chat operation (chat, generate, JSON-only, tool conversation; streamed and not), when run on both protocols, then the app gets the same kind of result — checked by live tests on OpenAI and llama-swap.
   - **US-057.AC-2** — Given either protocol, when the developer embeds text or lists models, then behaviour is unchanged.
-- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+- **Delivered:** 003.responses-chat (2026-11-08), 004.responses-tools (2026-11-08)
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07); delivery: sweeps 003.responses-chat and 004.responses-tools (2026-11-08)
 
 ### US-058 — Tool conversation with a reasoning model
 - **Feature:** FEAT-014, FEAT-005, FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-013 (A2)
-- **Status:** planned
+- **Status:** delivered
 - **Story:** As an application developer, I want a tool conversation with a reasoning model to complete, so that tools work with such models on Responses.
 - **Acceptance criteria:**
   - **US-058.AC-1** — Given an OpenAI reasoning model and offered tools, when the developer runs a tool conversation on Responses, then it completes (live).
@@ -675,41 +696,46 @@
   - **US-058.AC-3** — Given a round that reasoned, when the next round is sent within the same call, then the server receives that round's reasoning where the protocol needs it.
   - **US-058.AC-4** — Given a tool conversation, when it ends, then the app's conversation and finished history hold no reasoning (answers only).
   - **US-058.AC-5** — Given a tool conversation, when it ends, then the returned answer has no reasoning.
-- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+- **Delivered:** 004.responses-tools (2026-11-08)
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07); delivery: sweep 004.responses-tools (2026-11-08)
 
 ### US-059 — Reasoning on the Responses protocol
 - **Feature:** FEAT-014, FEAT-005 · **Actor:** ACT-001 · **Realizes:** UC-013 (A3, A4)
-- **Status:** planned
+- **Status:** delivered
 - **Story:** As an application developer, I want reasoning asked for and shown on Responses as on chat completions, so that the thinking switch works the same.
 - **Acceptance criteria:**
   - **US-059.AC-1** — Given thinking on and streaming, when the model reasons, then the receiver gets the reasoning as marked blocks, kept apart from the answer text.
   - **US-059.AC-2** — Given an OpenAI client with thinking on, when the developer calls, then the library asks for the model's reasoning summary.
-  - **US-059.AC-3** — Given thinking off, when the developer calls on Responses, then the server is asked for the lowest reasoning the model allows.
-- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+  - **US-059.AC-3** — Given thinking off, when the developer calls on Responses, then the server is asked for no reasoning.
+  - Exception (accepted): a model that refuses to skip reasoning ends the call with the library's error carrying the server's reason; the developer can pass their own reasoning effort instead (see US-025.AC-4, US-025.AC-6).
+- **Delivered:** 003.responses-chat (2026-11-08)
+- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07); AC-3 and its exception amended to what shipped: `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08)
 
 ### US-060 — Failures on Responses carry the server's reason
 - **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (E1–E3)
-- **Status:** planned
+- **Status:** delivered
 - **Story:** As an application developer, I want a failure on Responses reported with the server's reason, so that I can tell what went wrong.
 - **Acceptance criteria:**
   - **US-060.AC-1** — Given the server refuses a request, when the developer calls, then the library's error carries the server's reason.
   - **US-060.AC-2** — Given the server reports a failure inside a stream, when the developer streams, then the call ends with the library's error carrying the server's reason.
   - **US-060.AC-3** — Given a server without Responses, when the developer calls on the default protocol, then the error carries the server's reason.
   - **US-060.AC-4** — Given the server refuses a request, when the developer calls, then the library's error contains no credential.
+- **Delivered:** 003.responses-chat (2026-11-08)
 - **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
 
 ### US-061 — Settings without a Responses counterpart
 - **Feature:** FEAT-014 · **Actor:** ACT-001 · **Realizes:** UC-013 (E4)
-- **Status:** planned
+- **Status:** delivered (a tool conversation is also told once about a dropped setting)
 - **Story:** As an application developer, I want a setting Responses cannot take ignored with notice, so that the call still works and I know what was dropped.
 - **Acceptance criteria:**
   - **US-061.AC-1** — Given a setting with no counterpart on Responses, when the developer calls, then the call proceeds without it.
   - **US-061.AC-2** — Given a setting with no counterpart on Responses, when the developer calls, then the developer is told it was ignored.
+- **Delivered:** 003.responses-chat (2026-11-08), 004.responses-tools (2026-11-08)
 - **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
 
 ### US-062 — A reply cut short by my output length limit is returned
 - **Feature:** FEAT-010, FEAT-004 · **Actor:** ACT-001 · **Realizes:** UC-004 (A4), UC-005 (A5)
-- **Status:** not met (defect) — today on OpenAI's Responses protocol the call ends with an error
+- **Status:** delivered with accepted gap — AC-1..AC-5 met on OpenAI and llama-swap; AC-6 met on OpenAI, not met on llama-swap (the server reports a reply stopped for length as complete)
 - **Story:** As an application developer, I want a reply cut short by the length limit I set returned as text, so that a limit I chose is a normal result, not a failure.
 - **Acceptance criteria:**
   - **US-062.AC-1** — Given an output length limit set by the app, when the reply is cut short at that limit, then the call returns the text produced, not an error (chat and generate, on OpenAI and llama-swap, on both protocols).
@@ -718,6 +744,20 @@
   - **US-062.AC-4** — Given a tool conversation and an output length limit set by the app, when the final answer is cut short at that limit, then the call returns the cut answer.
   - **US-062.AC-5** — Given the app asked for a checked JSON answer and set an output length limit, when the answer is cut short at that limit and is not valid JSON, then the call ends with the same error as any invalid JSON answer.
   - **US-062.AC-6** — Given no output length limit set by the app, when the server stops the reply for length, then the call ends with an error.
-- **Source:** `[confirmed: user]` interview "Delta — token-cap cut-off" and "challenges — token-cap cut-off" (2026-11-08)
+  - Exception (accepted): on llama-swap, AC-6 does not hold — the server reports a reply stopped for length as complete, so the text is returned.
+- **Delivered:** 003.responses-chat (2026-11-08), 004.responses-tools (2026-11-08)
+- **Source:**
+  - `[confirmed: user]` interview "Delta — token-cap cut-off" and "challenges — token-cap cut-off" (2026-11-08)
+  - Exception: `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08), accepted gap
+
+### US-063 — A JSON-only answer uses my response format
+- **Feature:** FEAT-006 · **Actor:** ACT-001 · **Realizes:** UC-008 (A4)
+- **Status:** delivered
+- **Story:** As an application developer, I want a JSON-only answer to use the response format I set, so that my format is honoured and plain JSON is the fallback.
+- **Acceptance criteria:**
+  - **US-063.AC-1** — Given the app set a response format as a setting, when the developer asks for a JSON-only answer, then the server is asked for that format.
+  - **US-063.AC-2** — Given the app set no response format, when the developer asks for a JSON-only answer, then the server is asked for plain JSON.
+- **Delivered:** 001.core-fixes (2026-11-07)
+- **Source:** `[confirmed: user]` interview "finalize batch-2026-11-08 — extension 001/002" (2026-11-08)
 </auto-generated>
 <!-- product-spec:end -->

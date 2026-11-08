@@ -43,9 +43,9 @@
   - A6 A receiver without streaming: not used (observed, not a rule).
 - **Exception flows:**
   - E1 The server refuses or fails: an error on that call, carrying the server's reason and reply text.
-  - E2 Failure while streaming: an error of another kind, without the server's reply (accepted).
-  - E3 Unreachable server or exceeded time limit: today a transport error (defect, FEAT-002 gap).
-  - E4 Reply with no content: should be empty text (defect, FEAT-002 gap).
+  - E2 Failure while streaming: the call ends with the library's error carrying the server's reply.
+  - E3 Unreachable server or exceeded time limit: the library's own error.
+  - E4 Reply with no content: empty text, streamed or not, on OpenAI and llama-swap (the deprecated Ollama still returns nothing for a non-streamed one; FEAT-002 gap).
   - E5 Empty conversation: should be refused before the server is contacted (FEAT-002 gap).
   - E6 Deprecated Ollama: streaming is refused before anything is sent.
 - **Postconditions:** the developer holds the reply text; the conversation is as it was.
@@ -81,7 +81,7 @@
 - **Main flow:**
   1. The developer optionally gives client defaults when building the client.
   2. On a call, the developer optionally gives settings.
-  3. Per setting, the call-time value replaces the client default, which replaces the library's value; unmentioned settings are inherited.
+  3. Per setting, the call-time value replaces the client default, which replaces the library's value (OpenAI and llama-swap have none); unmentioned settings are inherited.
   4. The server receives the merged settings.
 - **Alternate flows:**
   - A1 An alternative name acts as the main name, across layers.
@@ -91,7 +91,7 @@
 - **Exception flows:**
   - E1 Wrong or out-of-range value: not checked; the server's refusal surfaces as a call error.
 - **Postconditions:** the call ran with the merged settings.
-- **Note (defect, FEAT-010 gap):** today the library also sends its own values for settings the app never set.
+- **Note (defect, FEAT-010 gap):** the deprecated Ollama client still sends its own values for settings the app never set.
 - **Source:**
   - A1, A2, A3, defect note: `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
   - A4: `[confirmed: user]` interview "Delta — token-cap cut-off" (2026-11-08)
@@ -113,7 +113,7 @@
 - **Exception flows:**
   - E1 The server refuses: an error before any piece (UC-002 E2).
   - E2 The connection drops or the time limit runs out mid-reply: pieces already received stay with the app; the call ends with an error (observed).
-  - E3 The server sends an error inside the stream, or the stream ends early for a reason other than the app's own length limit: should end with an error (defect, FEAT-004 gap).
+  - E3 The server sends an error inside the stream, or the stream ends early for a reason other than the app's own length limit: ends with the library's own error, on both protocols (carrying the server's reason for an in-stream failure).
   - E4 The receiver fails: the stream stops; the call ends with that failure.
   - E5 Deprecated Ollama: streaming is refused before the server is contacted.
 - **Postconditions:** the developer holds the whole text; the receiver got every piece produced before any failure.
@@ -137,16 +137,17 @@
   - A4 A model that does not reason: no blocks appear.
   - A5 Not streaming: the answer only.
   - A6 OpenAI: thinking on asks for the default reasoning effort; an explicit effort wins; the server's reasoning text is not shown. On Responses: OpenAI reasoning summary asked (UC-013 A3).
-  - A7 Thinking off: llama-swap tells the server (unverified, gap); OpenAI should ask for the lowest effort (defect). On Responses: thinking off asks for the lowest reasoning (UC-013 A4).
+  - A7 Thinking off: on chat completions llama-swap tells the server (unverified, gap) and OpenAI should ask for the lowest effort (defect). On Responses: the server is asked for no reasoning; a refusing model fails with the server's reason; the app may pass its own effort (UC-013 A4).
   - A8 Deprecated Ollama: the switch is ignored.
 - **Exception flows:**
   - E1 The stream fails during reasoning: the call fails; the block is left open (observed).
-  - E2 A piece carries both reasoning and answer text: the answer text is lost (defect, FEAT-005 gap).
+  - E2 A piece carries both reasoning and answer text: the receiver gets both.
 - **Postconditions:** the developer holds the streamed text, reasoning included for a plain chat.
 - **Source:**
   - Main flow step 3 (returned text includes reasoning), A5, A7 and E2 (gaps): `[confirmed: user]` interview "Wave 3 — FEAT-004 / FEAT-005 / FEAT-001 connections (batched)" (2026-11-07)
   - A3 exception (server-inlined reasoning returned and re-sent): `[confirmed: user]` same interview section (not selected as a defect)
   - A3 (Responses text), A6, A7 (Responses): `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+  - A7 (Responses, amended to what shipped): `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08)
   - Evidence only (main flow 1–2, A1–A4, A6, A8, E1): behaviour per deep-docs notes I-05, I-16
 
 ### UC-007 — Let the model use the app's tools
@@ -170,9 +171,9 @@
 - **Exception flows:**
   - E1 An offered tool has no function: refused before the server is contacted.
   - E2 A tool fails, or the model passes an argument the tool lacks: the call ends with an error naming the tool; tools already run keep their effects; the model is not told.
-  - E3 The round limit is reached: error, no partial answer; the last round's tools ran. The error should name the round limit as the reason (defect, FEAT-007 gap).
-  - E4 The model requests an unoffered tool, its argument text cannot be read, or a tool result cannot be made into text: today a raw program error (defect, FEAT-007 gap).
-  - E5 Streamed tool requests arrive without position numbers or with repeated names: merged into one broken call (defect, FEAT-007 gap).
+  - E3 The round limit is reached: error naming the round limit as the reason, no partial answer; the last round's tools ran.
+  - E4 The model requests an unoffered tool, its argument text cannot be read, or a tool result cannot be made into text: the call ends with the library's error (OpenAI and llama-swap).
+  - E5 Streamed tool requests arrive without position numbers or with repeated names: each runs as its own call with its own name and arguments.
 - **Postconditions:** the developer holds the final answer, or the call ended with an error.
 - **Source:**
   - E2 (the call ends, the model is not told), E3 (error reason), E4, E5, A5 (format on every round): `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
@@ -190,15 +191,17 @@
   - A1 A system instruction is sent first.
   - A2 Expected shape given: on llama-swap and OpenAI the reply is checked to be JSON; the shape itself is not sent and not checked field by field (FEAT-006 gap: it should be sent).
   - A3 Deprecated Ollama: the reply is always checked (observed).
+  - A4 The app set a response format as a setting: the server is asked for that format; otherwise for plain JSON (US-063).
 - **Exception flows:**
   - E1 The reply is checked and is not JSON: the call ends with the library's error.
   - E2 No expected shape on llama-swap or OpenAI: a non-JSON reply is returned unchecked (accepted).
-  - E3 A single-value JSON reply with an expected shape on OpenAI is wrongly reported as not JSON (defect, FEAT-006 gap).
+  - E3 A single-value JSON reply with an expected shape on OpenAI is returned.
   - E4 Server and connection failures: as in chat (UC-002 E1–E3).
 - **Postconditions:** the developer holds the reply text, or the call ended with an error.
 - **Source:**
   - A2 (check only with a shape), E2 and the shape gap: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
   - E3: `[confirmed: user]` Wave 5 — "drop the dead loop" (removes the single-value misreport)
+  - A4: `[confirmed: user]` interview "finalize batch-2026-11-08 — extension 001/002" (2026-11-08)
   - Evidence only (main flow, A1, A3, E1, E4): behaviour per deep-docs notes I-06-I-28
 
 ### UC-009 — Turn text into vectors
@@ -216,8 +219,8 @@
   - E1 The server refuses: the call ends with the library's error carrying the server's reply.
   - E2 The reply holds no vectors: the call ends with the library's error.
   - E3 A single text gets nothing back: the call ends with the library's error.
-  - E4 The number or order of vectors does not match the texts: returned silently (defect, FEAT-008 gap).
-  - E5 Malformed reply: a raw program error (defect, FEAT-008 gap).
+  - E4 The number of vectors does not match the texts: the call ends with the library's error.
+  - E5 Malformed reply: the call ends with the library's error.
   - E6 Empty batch: sent to the server (FEAT-008 gap: an empty result without contact).
 - **Postconditions:** the developer holds the vectors, or the call ended with an error.
 - **Source:**
@@ -238,7 +241,7 @@
 - **Exception flows:**
   - E1 The server refuses: the call ends with the library's error.
   - E2 A reply without a list: the library's error on llama-swap and OpenAI; the deprecated Ollama returns an empty list (accepted).
-  - E3 An entry without a name, or an unreadable reply: a raw program error (defect, FEAT-009 gap).
+  - E3 An entry without a name, or an unreadable reply: the call ends with the library's error.
 - **Postconditions:** the developer holds the model list, or the call ended with an error.
 - **Source:**
   - E2 (Ollama empty list — accepted), E3: `[confirmed: user]` interview "Wave 5 — FEAT-006 JSON / FEAT-008 embeddings / FEAT-009 models + misc (batched)" (2026-11-07)
@@ -258,9 +261,9 @@
   - A3 The app writes its own records through the library's trace facility (supported).
 - **Exception flows:**
   - E1 The call fails: the record ends with the error, and the same error reaches the app.
-  - E2 The folder cannot be written: today the call fails before anything is sent (defect, FEAT-011 gap: it should go ahead untraced).
-  - E3 Calls start at the same instant: one record can overwrite another (defect, FEAT-011 gap).
-  - E4 Writing the record fails while an error is being recorded: the call's own error is replaced (defect, FEAT-011 gap).
+  - E2 The folder cannot be written: the call goes ahead untraced.
+  - E3 Calls start at the same instant: each has its own record.
+  - E4 Writing the record fails while an error is being recorded: the app receives the call's own error.
 - **Postconditions:** each traced call has one record; the call's outcome is as without tracing.
 - **Source:**
   - A3, E2, E3, E4: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
@@ -281,7 +284,7 @@
 - **Exception flows:**
   - E1 A slot that can never be filled (it refers to itself) comes back still in the text, silently.
   - E2 An error while computing a value reaches the developer unchanged.
-  - E3 An unknown slot keeps repeated filling going after nothing more can be filled (defect, FEAT-012 gap).
+  - E3 An unknown slot: repeated filling stops as soon as nothing more can be filled.
 - **Postconditions:** the developer holds the filled text, or the computing error.
 - **Source:**
   - A1, A2, A3 (scope), A4 ("None"), E1, E2, E3: `[confirmed: user]` interview "Wave 6 — FEAT-012 templates (batched, 2026-11-07)"
@@ -299,7 +302,7 @@
   - A1 The developer chooses chat completions (server without Responses).
   - A2 Tool conversation with a reasoning model: each round's reasoning goes back to the server inside the call; the app gets the final answer.
   - A3 Thinking on: reasoning is asked for (on OpenAI: its reasoning summary).
-  - A4 Thinking off: the lowest reasoning the model allows.
+  - A4 Thinking off: the server is asked for no reasoning; a model that refuses this ends the call with the server's reason; the developer can pass their own reasoning effort instead.
   - A5 Embeddings and model listing: unaffected by the choice.
 - **Exception flows:**
   - E0 Ollama with an explicitly requested protocol: refused at build time.
@@ -308,6 +311,8 @@
   - E3 The server does not offer Responses: the call fails with the server's reason; the developer chooses chat completions.
   - E4 A setting with no Responses counterpart: ignored, the developer is told.
 - **Postconditions:** the developer holds the same kind of result as on chat completions, or the library's error carrying the server's reason.
-- **Source:** `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+- **Source:**
+  - `[confirmed: user]` interview "Delta — Responses protocol" and "challenges — Responses delta" (2026-11-07)
+  - A4 amended to what shipped: `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08)
 </auto-generated>
 <!-- product-spec:end -->

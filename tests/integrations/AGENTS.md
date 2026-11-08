@@ -43,6 +43,6 @@ See also: `docs/architecture/interfaces.md#consumed-backend-apis`; DEC-003-15 (l
 - Always use `async with client:` — [inferred]
 - Give test tools neutral names whose results cannot be guessed (`fetch_record`, `query_index`) — [sourced: commit 2efbfd3]
 - Assert only what a live model reliably produces: type, non-empty output, JSON validity, well-formed think tags, streamed text equal to returned text; never exact text (content exceptions: DEC-005-6) — [inferred]
-- Pydantic tool tests need the `dev` extra — [inferred]
+- Pydantic ships with the package as a runtime dependency (DEC-001-3); tests need the `dev` extra only for pytest / pytest-asyncio
 - New live files share `live_support.py` (readers, Responses client builder, piece recorder, reasoning-marker and secret-free error checks) and import nothing from other test files. Older files keep their module-local helpers (DEC-005-2) — [planner: 005.responses-live-tests]
 - A live failure caused by the library is a finding routed to `/bug-fixer`, never fixed or weakened in a test-only feature (DEC-005-1) — [planner: 005.responses-live-tests]

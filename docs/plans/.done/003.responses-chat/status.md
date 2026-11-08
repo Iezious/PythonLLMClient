@@ -317,3 +317,31 @@
 
 ### Step 007 — llama-swap Responses chat: a reply cut at the app's own output limit is returned
 - `llm/llama_swap.py` — `_responses_reply_text` and `_stream_responses_response` act on `output_limit_set` (exact `"max_output_tokens"` reason returns text / ends as at completion, open reasoning block closed by its own `</think>`); `chat` (both paths) and `chat_json` pass `"max_output_tokens" in opt`; docstrings of reader, parser, `chat`, `generate`, `chat_json` state the DEC-arch-13 / DEC-003-17..19 rule and the accepted llama-swap gap
+
+## Bug Fixes
+
+### Step 004 — llama-swap json_schema keeps type "json_schema" (2026-11-08)
+- `llm/llama_swap.py` — `_responses_text_format` drops a nested `type` key when flattening, so `text.format.type` stays `"json_schema"` (DEC-003-10); docstring updated
+
+### Step 002 / 003 / 004 — incomplete reason used only as a non-empty string (2026-11-08)
+- `llm/openai.py` — `_responses_reply_text` (also the non-streamed tool round), `_read_responses_stream` and `_read_responses_tool_stream` incomplete branches: description is the reason only when a non-empty str, else the incomplete details as JSON text (DEC-003-21); docstrings updated
+- `llm/llama_swap.py` — `_responses_reply_text` (also `_responses_tool_round`) incomplete branch follows the same rule (DEC-003-21); docstring updated; streamed parsers already compliant, unchanged
+
+## Tests
+
+### Step 004 / 002 / 003 / 005 — repro tests (2026-11-08)
+- `tests/test_responses_bugfix_reason_format.py` — covers s004 DoD-12, DoD-13 (+ feature 004 s003 DoD-3; s002 DoD-12 parity guard) — reproduces: llama-swap sends `text.format.type` `"x"` when the nested JSON-schema mapping carries its own `type`; asserts `{"type": "json_schema", "name": "a", "schema": S}` from `_responses_text_format` directly, from non-streamed `chat`, `chat_json` and `chat_with_tools(response_format=…)` (DEC-003-10); the OpenAI helper gives the same result.
+- `tests/test_responses_bugfix_reason_format.py` — covers s002 DoD-5, s003 DoD-5, s004 DoD-5, s005 DoD-6 (+ feature 004 s001 DoD-17, s002 DoD-8, s003 DoD-17, s004 DoD-9) — reproduces: the incomplete `LLMError` description is `""` / `"5"` for reason `""` / `5` instead of the JSON text of the details; asserts DEC-003-21 (description = reason only when a non-empty string, else `json.loads(description) == incomplete_details`) for reason `"content_filter"`, `""`, `5`, `None` and details without reason, no app output limit, on OpenAI non-streamed chat, chat stream parser, tool-round stream parser, non-streamed tool round, and the same four llama-swap paths.
+- Expected red before the fix: the four Bug A llama-swap tests; Bug B non-string / empty-reason params of the OpenAI non-streamed chat, OpenAI chat stream, OpenAI tool-round stream and llama-swap non-streamed chat tests. Regression guards (expected green): s002 DoD-12 OpenAI parity, every `string-reason` param, llama-swap chat stream (s005 DoD-6) and tool-round stream (feature 004 s004 DoD-9). Non-streamed tool-round tests on both classes: red/green status not predicted (not named in the bug report; DEC-003-21 covers them).
+- Coverage: s004 DoD-12 ✓, s004 DoD-13 ✓, s002 DoD-5 ✓, s003 DoD-5 ✓, s004 DoD-5 ✓, s005 DoD-6 ✓ (guard)
+
+#### Notes
+- Tags use a step prefix (`__s004_DoD12`, `__f004_s002_DoD8`) because the ids span several steps of feature 003 and some of feature 004.
+- Not run; ruff not run (no command execution in this role).
+
+## Rewrites
+
+### Finalize code gaps (docs in code, README)
+- R1 README describes the delivered Responses classes — `README.md` — Protocols "Interim limitation" note replaced by the delivered tool-chat behaviour on Responses (streamed and not, reasoning carried between rounds of one call, `response_format` translated), chat-completions kept as the alternative protocol; Tool Calling intro no longer says the Responses classes refuse `chat_with_tools`; JSON-format table gains `OpenAIAPIClient` / `LlamaSwapAPIClient` rows; Architecture tree adds `tools.py`, `py.typed` and describes `llm_client.py` as the shared base class (no abc).
+- R2 Docstrings/comments cite decision ids, not plan files — `tests/*.py` (26 unit files incl. `test_llamaswap_responses_tools.py`, `test_llm_tools_errors.py`, `test_responses_bugfix_reason_format.py`), `tests/integrations/*.py` (19 files incl. `test_responses_settings.py`, `test_responses_output_limit.py`, `test_responses_tools_extra.py`, `live_support.py` and the seven older live files' "Step 004 DoD-20" key-reader docstrings), `llm/openai.py`, `llm/llama_swap.py`, `llm/openai_chat_completions.py`, `llm/llama_swap_chat_completions.py`, `llm/llm_client.py`, `llm/llm.py` — every `docs/plans/…`, `NNN.context.md` / `context.md` and "feature/plan NNN, step NNN" citation replaced by the DEC id(s) or architecture § recording the fact (e.g. wire vocabulary → DEC-003-13 / DEC-004-9 / DEC-arch-11, well-formed reasoning block → DEC-005-6, regression suite → DEC-arch-12, positions → DEC-002-8 / DEC-002-6); facts with no DEC home stated inline ("no DEC records this", "probe shape"); DoD tags and test names untouched; AST (docstrings stripped) identical before/after for every touched file.
+- R3 Long docstring lines in openai.py — `llm/openai.py` — the two >120-char lines in `_responses_reply_text` and `_read_responses_stream` docstrings re-wrapped, same wording.

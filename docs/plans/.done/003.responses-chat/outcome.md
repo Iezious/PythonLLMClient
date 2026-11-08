@@ -49,6 +49,19 @@
 - DEC-003-19 — A cut at the app's limit reads like a completed reply, streamed and not (extension 2026-11-08)
 - DEC-003-20 — The output-limit flag name is shared with feature 004's tool-round readers (extension 2026-11-08)
 
+- DEC-003-21 — The incomplete reason counts only as a non-empty string, else the details go as JSON (bug fix 2026-11-08)
+
+### DEC-003-21 — The incomplete reason counts only as a non-empty string, else the details go as JSON
+- **Status:** accepted
+- **Stage:** 002.responses · **Feature:** 003.responses-chat · **Step:** 003, 005 (bug fix)
+- **Date:** 2026-11-08 · **Decided by:** user
+- **Question:** DEC-003-12 and DEC-003-13 make the `LLMError` description of an incomplete reply "the reason when present, else the incomplete details as JSON text". What counts as present? OpenAI's stream used the reason as text whenever it was not `None` (so `""` gave an empty description and `5` gave `"5"`), while llama-swap used it only when it was a non-empty string.
+- **Decision:** On both Responses classes, streamed and non-streamed, the reason is used as the description only when the incomplete details are a mapping whose `reason` is a non-empty string; in every other case (missing, `None`, `""`, a non-string) the description is the incomplete details value as JSON text. Amends the "when present" wording of DEC-003-12 and DEC-003-13. Unchanged: DEC-003-18 (only the exact `max_output_tokens` reason with an app limit is a cut).
+- **Reason:** An empty description hides what the server sent; the JSON fallback always carries it. The two copies must read the same server reply the same way.
+- **Rejected:** Any non-`None` reason written as text (an empty or meaningless description); keeping the difference with a comment (the same server data would give different errors per backend).
+- **Lands in:** `llm/openai.py` (stream and non-streamed incomplete branches), `llm/llama_swap.py` (same, where they differ)
+- **Cites:** DEC-003-12; DEC-003-13; DEC-003-18
+
 ## Observations
 
 _appended by coder / fixer / reviser; each bullet tagged [product] | [architecture] | [decision]_

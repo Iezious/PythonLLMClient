@@ -2,20 +2,22 @@
 
 ## Project Overview
 
-Async Python client library providing a unified interface to multiple LLM backends (Ollama, OpenAI, llama-swap). Built on `aiohttp` with typed options and no heavy dependencies (pydantic is imported at package load, see DEC-000-43).
+Async Python client library providing a unified interface to multiple LLM backends (Ollama, OpenAI, llama-swap). Built on `aiohttp` with typed options and no heavy dependencies (pydantic is a declared runtime dependency, see DEC-001-3).
 
 ## Repository Structure
 
 ```text
 llm/                  # Main package (all source lives here)
   __init__.py         # Public exports
-  exceptions.py       # LLMError
+  exceptions.py       # LLMError, LLMSettingIgnoredWarning
   message.py          # LLMMessage TypedDict
   options.py          # Typed option dicts (BaseLLMOptions, OllamaOptions, OpenAIOptions)
   llm_client.py       # Base class with shared HTTP/SSE logic
   ollama.py           # OllamaAPIClient
-  openai.py           # OpenAIAPIClient
-  llama_swap.py       # LlamaSwapAPIClient
+  openai.py           # OpenAIAPIClient (Responses protocol)
+  openai_chat_completions.py      # OpenAIChatCompletionsClient (chat completions)
+  llama_swap.py       # LlamaSwapAPIClient (Responses protocol)
+  llama_swap_chat_completions.py # LlamaSwapChatCompletionsClient (chat completions)
   tools.py            # pydantic_to_openai_tool helper
   trace.py            # LLMTracer — env-driven trace logging for LLM interactions
   llm.py              # Factory function + placeholder utilities + retired CLI smoke test
@@ -27,10 +29,10 @@ pyproject.toml        # Build config, dependencies, tool settings
 
 ## Key Patterns
 
-- **Base class**: `LLMClient` in `llm_client.py` holds shared HTTP plumbing (`_request`, `_iter_sse_data`, `_stream_openai_chat_response`, `_merge_options_base`). Subclasses override `_merge_options`, `chat`, `generate`, `chat_json`, `chat_with_tools`, `embed_batch`, `list_models`, `get_models` (the base raises `NotImplementedError`; there is no `abc`).
+- **Base class**: `LLMClient` in `llm_client.py` holds shared HTTP plumbing (`_request`, `_stream_post`, `_iter_sse_data`, `_stream_openai_chat_response`, `_merge_options_base`). Subclasses override `_merge_options`, `chat`, `generate`, `chat_json`, `chat_with_tools`, `embed_batch`, `list_models`, `get_models` (the base raises `NotImplementedError`; there is no `abc`).
 - **Async context manager**: All clients support `async with client:` for session lifecycle.
 - **Options merging**: Three-layer merge (defaults -> constructor defaults -> call-time) via `_merge_options_base` with alias support.
-- **No models dependency**: This package is self-contained. It does NOT depend on any external `models` package (pydantic is imported at package load but declared only in the `dev` extra, DEC-000-43).
+- **No models dependency**: This package is self-contained. It does NOT depend on any external `models` package (pydantic is a declared runtime dependency in `dependencies`; the `dev` extra holds only pytest, pytest-asyncio, aioresponses, ruff — DEC-001-3).
 
 ## Conventions
 
@@ -39,12 +41,12 @@ pyproject.toml        # Build config, dependencies, tool settings
 - `aiohttp` for all HTTP; no `requests` or `httpx`
 - Imports use `from llm.xxx import Yyy` (absolute; only `llm/__init__.py` uses relative imports)
 - Ruff for linting (line-length 120)
-- The app provides the OpenAI credential; the library must never read it from the environment (today's env read is a known defect, DEC-000-1/2)
-- Tests with pytest-asyncio, fake the server by monkeypatching client seams (`_request`, `_tools_stream_request`, `_iter_sse_data`); aioresponses is unused
+- The app provides the OpenAI credential; the library never reads it from the environment (the earlier env read is fixed, DEC-001-6)
+- Tests with pytest-asyncio, fake the server by monkeypatching client seams (`_request`, `_stream_post`, `_iter_sse_data`; `_tools_stream_request` on the chat-completions classes); aioresponses is unused
 
 ## Adding a New Backend
 
-1. Create `llm/new_backend.py` with a class inheriting `LLMClient`
+1. Create `llm/new_backend.py` with a class inheriting `LLMClient`; choose the protocol — an OpenAI-family backend may need a Responses class and a chat-completions class (`llm/new_backend_chat_completions.py`), picked by the factory's `protocol` argument (`docs/architecture/interfaces.md` § Protocol axis)
 2. Define `_<BACKEND>_SUPPORTED_PARAMS` and `_<BACKEND>_ALIAS_MAP` dicts (backend-prefixed names)
 3. Override every `NotImplementedError` method the backend supports (including `get_models`)
 4. Register in `get_llm_client()` factory in `llm/llm.py`
@@ -57,10 +59,13 @@ pyproject.toml        # Build config, dependencies, tool settings
 uv venv                        # Create virtual environment (first time)
 uv pip install -e ".[dev]"     # Install with dev dependencies
 uv run pytest                  # Run unit AND live tests (live tests need servers)
+uv run pytest tests/ --ignore=tests/integrations  # Unit tests only (no servers)
 uv run pytest tests/integrations/  # Run integration tests (needs live servers)
 uv run ruff check llm/        # Lint
 uv run ruff format llm/       # Format
 ```
+
+After changing dependencies in `pyproject.toml`, run `uv lock` to refresh `uv.lock`.
 
 <!-- legacy-docs-bootstrapper:start -->
 ## Documentation layout
@@ -107,5 +112,5 @@ This repo uses `code_index` (config `docs/.helpers/config.toml`); query it via `
 - `tests/AGENTS.md` — unit tests.
 - `tests/integrations/AGENTS.md` — live tests.
 
-See also: `docs/architecture/overview.md`; `DEC-000-43` (pydantic imported at package load vs runtime deps), `DEC-000-53` (version declared in two places) in `docs/decisions/000.legacy.md`.
+See also: `docs/architecture/overview.md`; `DEC-001-3` (pydantic is a runtime dependency; supersedes DEC-000-43), `DEC-001-4` (version 0.2.0, declared in two places — `pyproject.toml` and `llm/__init__.py`; supersedes DEC-000-53).
 <!-- agent-ready:end -->
