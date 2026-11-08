@@ -4,8 +4,9 @@ Feature 003.responses-chat, step 004. Covers ``LlamaSwapAPIClient`` on the Respo
 non-streamed ``chat``, ``generate`` and ``chat_json``: the exact request body (DEC-003-11), the settings
 mapping and the ignored-setting warning (DEC-003-9, DEC-003-6), thinking as the reasoning effort without a
 summary (DEC-003-1, DEC-003-2), the text-format translation (DEC-003-10), reply extraction and failed /
-incomplete replies (DEC-003-12), the tool-chat refusal (DEC-003-4), non-2xx failures, the optional
-credential, the unchanged model-list / embedding operations and tracing. Each test names its DoD id.
+incomplete replies (DEC-003-12), non-2xx failures, the optional credential, the unchanged model-list /
+embedding operations and tracing. Each test names its DoD id. (003's tool-chat refusal test, DoD-14, was
+removed by feature 004 step 003, which replaces the refusal with the Responses tool loop.)
 """
 
 import copy
@@ -813,58 +814,6 @@ async def test_llamaswap_chat_json_with_shape_returns_valid_json_unchanged__DoD1
     result = await client.chat_json(_USER_MESSAGES, response_schema=_SCHEMA)
 
     assert result == reply_text
-
-
-# ---------------------------------------------------------------------------
-# DoD-14 — tool chat refused
-# ---------------------------------------------------------------------------
-
-_TOOL_DEFS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "add",
-            "description": "Add two integers.",
-            "parameters": {
-                "type": "object",
-                "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
-                "required": ["a", "b"],
-            },
-        },
-    }
-]
-
-
-def _add(a: int, b: int) -> int:
-    """Tool offered to the refused tool chat; never expected to run."""
-    return a + b
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True])
-async def test_llamaswap_chat_with_tools_refused_naming_chat_completions_class__DoD14(monkeypatch, stream):
-    """DoD-14: refused with NotImplementedError naming LlamaSwapChatCompletionsClient; no request, no warning."""
-    client = _client(default_options={"seed": 7, "stop": ["END"]})
-    captured = _fake_request(monkeypatch, client, [_text_reply("never")])
-    # A recording session as well, so a request through any other path (e.g. a stream) is noticed.
-    session = _FakeSession(200, _text_reply("never"))
-    client.session = session
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        with pytest.raises(NotImplementedError) as excinfo:
-            await client.chat_with_tools(
-                [{"role": "user", "content": "What is 1+2?"}],
-                tools_definitions=_TOOL_DEFS,
-                tools={"add": _add},
-                options={"presence_penalty": 0.5},
-                stream=stream,
-            )
-
-    assert "LlamaSwapChatCompletionsClient" in str(excinfo.value)
-    assert captured == []
-    assert session.calls == []
-    assert _ignored(records) == []
 
 
 # ---------------------------------------------------------------------------

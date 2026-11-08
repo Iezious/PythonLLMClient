@@ -12,9 +12,9 @@ The package: base client with shared HTTP/SSE/option-merge plumbing, backend cli
 - `message.py` — `LLMMessage` TypedDict for one conversation message.
 - `options.py` — typed option dicts (`BaseLLMOptions`, `OllamaOptions`, `OpenAIOptions`).
 - `llm_client.py` — `LLMClient` base: session lifecycle, `_request` (non-streaming) and `_stream_post` (the one way a streamed request is opened), the SSE reader `_iter_sse_data`, the shared chat/tool stream parsers with error-frame and early-end checks (the tool parser groups streamed tool-call fragments by position, call id and name), tool loop, option-merge base; unsupported methods raise `NotImplementedError`.
-- `openai.py` — `OpenAIAPIClient`, OpenAI on the Responses protocol: `chat` / `generate` / `chat_json` over `/responses` with its own stream parser, settings mapped to the wire with a once-per-client `LLMSettingIgnoredWarning`, `chat_with_tools` refused until feature 004; credential only from `bearer_token`; model-list and embedding replies checked.
+- `openai.py` — `OpenAIAPIClient`, OpenAI on the Responses protocol: `chat` / `generate` / `chat_json` over `/responses` with its own stream parser, settings mapped to the wire with a once-per-client `LLMSettingIgnoredWarning`; `chat_with_tools` runs the tool loop over `/responses`, streamed and not (tools flattened, calls / results / assistant text as typed input items, each round's reasoning carried to later rounds, 002's loop rules), streamed rounds read by its own tool-round parser `_read_responses_tool_stream`; credential only from `bearer_token`; model-list and embedding replies checked.
 - `openai_chat_completions.py` — `OpenAIChatCompletionsClient`, OpenAI on chat completions: verbatim renamed copy of the previous `OpenAIAPIClient` (tool loop, checked replies); changes only for chat-completions fixes.
-- `llama_swap.py` — `LlamaSwapAPIClient`, llama-swap (primary backend) on the Responses protocol: its own copy of the Responses request, reply and stream handling (thinking sent as the reasoning effort, never a summary), `chat_with_tools` refused until feature 004.
+- `llama_swap.py` — `LlamaSwapAPIClient`, llama-swap (primary backend) on the Responses protocol: its own copy of the Responses request, reply and stream handling (thinking sent as the reasoning effort, never a summary); `chat_with_tools` runs its own copy of the Responses tool loop, streamed and not (same rules as `openai.py`), streamed rounds read by its own tool-round parser `_stream_responses_tool_round`.
 - `llama_swap_chat_completions.py` — `LlamaSwapChatCompletionsClient`, llama-swap on chat completions: verbatim renamed copy of the previous `LlamaSwapAPIClient`.
 - `ollama.py` — `OllamaAPIClient`, deprecated, observation-only.
 - `tools.py` — `pydantic_to_openai_tool` helper that builds a tool definition from a pydantic model.
@@ -22,16 +22,16 @@ The package: base client with shared HTTP/SSE/option-merge plumbing, backend cli
 - `llm.py` — `get_llm_client` factory (server kind plus `protocol`: omitted / `"responses"` / `"chat_completions"`, refused on Ollama; forwards the app's credential), placeholder-template helpers (repeated filling stops after a pass that changes nothing), retired CLI smoke test.
 - `py.typed` — PEP 561 typing marker.
 
-See also: `docs/architecture/subsystems.md`, `docs/architecture/interfaces.md`, `docs/architecture/data-model.md`; decisions by file (`docs/decisions/000.legacy.md` for DEC-000, `docs/decisions/001.core-fixes.md` for DEC-001, `docs/decisions/002.edge-fixes.md` for DEC-002, `docs/decisions/003.responses-chat.md` for DEC-003, `docs/decisions/arch-responses-protocol.md` for DEC-arch):
+See also: `docs/architecture/subsystems.md`, `docs/architecture/interfaces.md`, `docs/architecture/data-model.md`; decisions by file (`docs/decisions/000.legacy.md` for DEC-000, `docs/decisions/001.core-fixes.md` for DEC-001, `docs/decisions/002.edge-fixes.md` for DEC-002, `docs/decisions/003.responses-chat.md` for DEC-003, `docs/decisions/004.responses-tools.md` for DEC-004, `docs/decisions/arch-responses-protocol.md` for DEC-arch):
 - `llm_client.py` — DEC-000-2, 4, 5, 9, 11, 12, 13, 14, 15, 17, 20, 21, 22, 23, 24, 25, 32, 33, 34, 40, 41, 50; DEC-000-16 (withdrawn); DEC-001-1, 7, 8, 9, 10, 11; DEC-002-6
-- `openai.py`, `llama_swap.py` (Responses) — DEC-003-1, 2 (llama-swap), 4, 5, 6, 9, 10, 11, 12, 13; DEC-arch-1, 2, 3, 5, 6, 7, 8, 10, 11
+- `openai.py`, `llama_swap.py` (Responses) — DEC-003-1, 2 (llama-swap), 4 (tool-chat refusal, lifted by feature 004), 5, 6, 9, 10, 11, 12, 13; DEC-004-1, 4, 5, 6, 7, 8, 9, 10, 11, 12; DEC-arch-1, 2, 3, 5, 6, 7, 8, 10, 11
 - `openai_chat_completions.py`, `llama_swap_chat_completions.py` — DEC-003-3, 7; DEC-arch-1; carried over from the previous clients: DEC-000-2 (openai), 5, 6, 7, 8, 9, 10, 12, 14, 15, 18 (llama-swap), 19, 23, 25, 26, 27, 28, 29, 30, 33, 35, 36, 37, 38, 39, 40, 41, 48, 49; DEC-001-2, 6 (openai), 8, 12, 13, 14, 15, 16; DEC-002-1, 2, 3, 4, 5, 7, 8, 9, 10
 - `ollama.py` — DEC-000-6, 7, 9, 14, 15, 25, 26, 27, 28, 29, 30, 36, 37, 38, 41, 42, 49
 - `options.py` — DEC-000-7, 17, 18; DEC-001-14
 - `tools.py` — DEC-000-31, 43
 - `trace.py` — DEC-000-4, 9, 11, 44, 45, 46, 47, 48, 49, 50; DEC-002-11, 12, 13, 14, 16
 - `llm.py` — DEC-000-1, 3, 14, 15, 51, 52; DEC-001-5; DEC-002-15; DEC-003-8; DEC-arch-4
-- `__init__.py` — DEC-000-18, 31, 43, 50, 51, 53; DEC-001-4; DEC-003-14
+- `__init__.py` — DEC-000-18, 31, 43, 50, 51, 53; DEC-001-4; DEC-003-14 (superseded); DEC-004-3 (version stays 0.2.0)
 - `exceptions.py` — DEC-003-5; DEC-arch-6
 
 <!-- agent-ready:end -->

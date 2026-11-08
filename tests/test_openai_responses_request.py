@@ -2,8 +2,8 @@
 
 Covers the Responses request body (DEC-003-11), reply text extraction and failed / incomplete replies
 (DEC-003-12), the settings mapping and the ignored-setting warning (DEC-003-9, DEC-003-6, DEC-003-1), the
-response-format translation (DEC-003-10), the tool-chat refusal (DEC-003-4), non-2xx errors and the
-credential (US-060, DEC-001-6), unchanged model listing and embeddings (US-057.AC-2) and tracing. The server
+response-format translation (DEC-003-10), non-2xx errors and the credential (US-060, DEC-001-6), unchanged
+model listing and embeddings (US-057.AC-2) and tracing. The server
 is faked through the ``_request`` seam or a fake session (DEC-003-16). Every expected value comes from the
 step's Definition of done and the cited decisions.
 """
@@ -881,61 +881,6 @@ async def test_openai_chat_json_with_schema_valid_json_returned_unchanged__DoD13
     _capture_requests(monkeypatch, client, [_text_reply(reply_text)])
 
     assert await client.chat_json(list(USER_MESSAGES), response_schema=ANSWER_SCHEMA) == reply_text
-
-
-# ---------------------------------------------------------------------------
-# Tool chat refused (DoD-14)
-# ---------------------------------------------------------------------------
-
-_TOOL_DEFS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_record",
-            "description": "Retrieve a stored record by its key.",
-            "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]},
-        },
-    }
-]
-
-
-def _fetch_record(key: str) -> str:
-    """The offered tool; never run, since the call is refused before any round."""
-    return "alpha-77"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["non-streamed", "streamed"])
-async def test_openai_chat_with_tools_refused_before_any_request__DoD14(monkeypatch, stream):
-    """DoD-14: chat_with_tools raises NotImplementedError naming OpenAIChatCompletionsClient, sends nothing and
-    warns about nothing, even with no-counterpart settings set."""
-    client = _client(default_options={"seed": 7, "stop": ["END"]})
-    records = _capture_requests(monkeypatch, client, [_text_reply()])
-    stream_calls: list[Any] = []
-
-    def fake_stream_post(*args, **kwargs):
-        stream_calls.append((args, kwargs))
-        raise AssertionError("no streamed request may be opened")
-
-    monkeypatch.setattr(client, "_stream_post", fake_stream_post)
-    # Any request reaching the transport would be recorded here, whichever path it took.
-    session = _FakeSession(200, json.dumps(_text_reply()))
-    client.session = session
-
-    with _capture_warnings() as caught, pytest.raises(NotImplementedError) as excinfo:
-        await client.chat_with_tools(
-            list(USER_MESSAGES),
-            tools_definitions=_TOOL_DEFS,
-            tools={"fetch_record": _fetch_record},
-            options={"presence_penalty": 0.5, "logit_bias": {"1": 2}},
-            stream=stream,
-        )
-
-    assert "OpenAIChatCompletionsClient" in str(excinfo.value)
-    assert records == []
-    assert stream_calls == []
-    assert session.calls == []
-    assert _ignored(caught) == []
 
 
 # ---------------------------------------------------------------------------

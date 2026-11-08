@@ -3,6 +3,9 @@
 Feature 003 step 004 rewrites ``LlamaSwapAPIClient`` for the Responses protocol (``POST /responses``,
 DEC-003-9..12, DEC-003-2); its chat-completions behaviour lives on in ``llm/llama_swap_chat_completions.py``.
 Step 005 adds the streamed path: its own Responses event parser (DEC-003-13, DEC-arch-2).
+Feature 004 step 003 adds the non-streamed tool loop on Responses: tool flattening, typed call/result
+items, per-call reasoning carry (DEC-004-5..12), all its own copy (DEC-arch-2); step 004 adds the
+streamed tool rounds with their own tool-round event parser (DEC-004-9).
 Model listing and embeddings keep the reply checks of feature 002 step 003 (DEC-002-8..10).
 """
 
@@ -133,6 +136,207 @@ def _responses_reply_text(reply: Any) -> str:
                 if isinstance(text, str):
                     parts.append(text)
     return "".join(parts)
+
+
+def _tool_definition_name(definition: Any) -> Any:
+    """Return the tool name an app tool definition advertises (DEC-004-5).
+
+    Used by the pre-flight check (advertised without a callable) and to build the offered-name set
+    of the offered check (DEC-002-3). Never modifies ``definition``.
+
+    Args:
+        definition: One entry of ``tools_definitions``: nested
+            ``{"type": "function", "function": {"name", ...}}`` (as ``pydantic_to_openai_tool``
+            builds it) or flat Responses ``{"type": "function", "name", ...}``.
+
+    Returns:
+        ``function.name`` for an entry with a ``function`` mapping, ``name`` for a flat entry; the
+        value as given (``None`` when absent).
+    """
+    if not isinstance(definition, Mapping):
+        return None
+    function = definition.get("function")
+    # Same nested/flat split as `_responses_tools`: only a `function` mapping marks a nested entry.
+    if isinstance(function, Mapping):
+        return function.get("name")
+    return definition.get("name")
+
+
+def _responses_tools(tools_definitions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten the app's tool definitions into Responses function tools (DEC-004-5, DEC-004-1).
+
+    Per entry, in order: an entry with a ``function`` mapping becomes
+    ``{"type": "function", "name": function.name, "description": function.description (only when
+    present), "parameters": function.parameters (only when present), "strict": function.strict when
+    present, else False}``; an entry without a ``function`` key is passed through unchanged.
+
+    Args:
+        tools_definitions: The app's definitions; neither the list nor any entry is modified.
+
+    Returns:
+        A new list, same length and order, sent as ``tools`` on every round.
+    """
+    flat: list[dict[str, Any]] = []
+    for definition in tools_definitions:
+        function = definition.get("function") if isinstance(definition, Mapping) else None
+        if not isinstance(function, Mapping):
+            # Already flat (or unrecognised): sent as given, keeping its own `strict` (DEC-004-5).
+            flat.append(definition)
+            continue
+        tool: dict[str, Any] = {"type": "function", "name": function.get("name")}
+        if "description" in function:
+            tool["description"] = function["description"]
+        if "parameters" in function:
+            tool["parameters"] = function["parameters"]
+        # DEC-004-1: copy the app's flag; otherwise false, so typical non-strict schemas
+        # (pydantic_to_openai_tool output) are not constrained by strict mode.
+        tool["strict"] = function.get("strict", False)
+        flat.append(tool)
+    return flat
+
+
+def _responses_tool_round(reply: Any) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read one non-streamed tool-round reply into round text, tool calls and carry items (DEC-004-8).
+
+    The status is checked first exactly as ``_responses_reply_text`` does (DEC-003-12). Then
+    ``output`` is visited in order: ``function_call`` items become calls, ``message`` items give the
+    round text, ``reasoning`` items are kept verbatim; every other item type is ignored.
+
+    Args:
+        reply: The decoded body ``_request`` returned for one ``POST /responses`` round.
+
+    Returns:
+        ``(text, calls, reasoning)``:
+
+        - ``text`` — the round text (output-text parts of message items concatenated, no separator;
+          ``""`` when none), never reasoning text or a marker;
+        - ``calls`` — one ``{"call_id", "name", "arguments"}`` mapping per ``function_call`` item in
+          order of appearance (list position is the dense 0-based call number, DEC-arch-10), values
+          as the server sent them (missing → ``None``), without the server's item ``id``;
+        - ``reasoning`` — the reasoning items exactly as received, in output order (DEC-004-7).
+
+    Raises:
+        LLMError: ``status`` ``failed`` / ``incomplete``, carrying the server's reason (DEC-003-12).
+    """
+    # Reusing the chat path's reader gives exactly DEC-003-12: status first (failed / incomplete →
+    # LLMError with the server's reason), then the message items' output-text parts joined.
+    text = _responses_reply_text(reply)
+    calls: list[dict[str, Any]] = []
+    reasoning: list[dict[str, Any]] = []
+    output = reply.get("output")
+    if not isinstance(output, list):
+        return text, calls, reasoning
+    for item in output:
+        if not isinstance(item, Mapping):
+            continue
+        kind = item.get("type")
+        if kind == "function_call":
+            # The server's item `id` is dropped: the round input sends the reduced call (DEC-004-6).
+            calls.append(
+                {
+                    "call_id": item.get("call_id"),
+                    "name": item.get("name"),
+                    "arguments": item.get("arguments"),
+                }
+            )
+        elif kind == "reasoning":
+            # Kept as received (DEC-004-7); llama.cpp's empty summary / encrypted content included.
+            reasoning.append(item)
+    return text, calls, reasoning
+
+
+def _offered_tool_name(call: Any, offered: set[str]) -> str:
+    """Return the tool name of one Responses function call after checking it was offered (DEC-002-3).
+
+    llama-swap Responses copy (DEC-arch-2): the name is read from the call's top-level ``name``
+    (the shape ``_responses_tool_round`` returns), not from a nested ``function``.
+
+    Args:
+        call: One call as returned by ``_responses_tool_round`` (``{"call_id", "name", "arguments"}``).
+        offered: Names advertised in ``tools_definitions`` (via ``_tool_definition_name``).
+
+    Returns:
+        The requested name, guaranteed to be in ``offered``.
+
+    Raises:
+        LLMError: The name is missing or empty (also when the call is not a mapping) —
+            "The model requested a tool call with an empty tool name"; or it is not text / not
+            advertised, even when ``tools`` holds a callable for it —
+            "The model requested tool '<name>', which was not offered".
+    """
+    name = call.get("name") if isinstance(call, Mapping) else None
+    # A malformed call is reported as an empty name rather than a raw KeyError/TypeError.
+    if not name:
+        raise LLMError("The model requested a tool call with an empty tool name")
+    if not isinstance(name, str) or name not in offered:
+        raise LLMError(f"The model requested tool '{name}', which was not offered")
+    return name
+
+
+def _read_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
+    """Turn a requested call's arguments into the keyword mapping the tool is called with (DEC-002-4).
+
+    Copy of the chat-completions helper (not imported, DEC-arch-2).
+
+    Args:
+        name: The (offered) tool name, used in the error message.
+        raw: The call's ``arguments`` value as received.
+
+    Returns:
+        ``{}`` for ``None`` or ``""``; a mapping as a new ``dict``; the decoded JSON object for text.
+
+    Raises:
+        LLMError: Text that is not JSON (chained from the decode error), JSON that is not an object,
+            or a value that is neither text nor a mapping; the message names the tool and the
+            description carries the reason.
+    """
+    # Only None and "" count as "no arguments"; other falsy values (0, [], False) are unusable
+    # forms and fall through to the error below (DEC-002-4).
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"Arguments for tool '{name}' are not valid JSON", description=str(exc)) from exc
+        if not isinstance(decoded, dict):
+            raise LLMError(
+                f"Arguments for tool '{name}' are not a JSON object",
+                description=f"decoded to {type(decoded).__name__}",
+            )
+        return decoded
+    raise LLMError(
+        f"Arguments for tool '{name}' are not readable",
+        description=f"unsupported type {type(raw).__name__}",
+    )
+
+
+def _tool_result_text(name: str, result: Any) -> str:
+    """Turn a tool's return value into the ``function_call_output`` text (DEC-002-5).
+
+    Copy of the chat-completions helper (not imported, DEC-arch-2).
+
+    Args:
+        name: The tool name, used in the error message.
+        result: The value the tool returned (already awaited).
+
+    Returns:
+        JSON text with non-ASCII kept for a ``dict`` or ``list``; ``str(result)`` otherwise.
+
+    Raises:
+        LLMError: The ``dict`` or ``list`` cannot be serialised; names the tool, chained from the error.
+    """
+    # Only dict/list are JSON-encoded; other values keep their text form so an object with a custom
+    # __str__ is still sent as that text (DEC-002-5).
+    if not isinstance(result, (dict, list)):
+        return str(result)
+    try:
+        return json.dumps(result, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        # TypeError: a non-serialisable element; ValueError: a circular reference.
+        raise LLMError(f"Result of tool '{name}' cannot be serialised to JSON", description=str(exc)) from exc
 
 
 async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str, **kwargs: Any) -> Any:
@@ -289,7 +493,8 @@ class LlamaSwapAPIClient(LLMClient):
     the app's settings are sent, translated to Responses names; supported settings without a
     Responses counterpart are dropped with one ``LLMSettingIgnoredWarning`` per setting per client
     instance (DEC-003-6); thinking and an explicit effort reach the engine as ``reasoning.effort``,
-    never with a summary (DEC-003-2). ``chat_with_tools`` is refused until feature 004 (DEC-003-4).
+    never with a summary (DEC-003-2). ``chat_with_tools`` runs the tool loop on Responses with its
+    own copy of flattening, item conversion and round reading (feature 004, DEC-004-5..11).
     ``list_models``, ``get_models`` and ``embed_batch`` are unchanged (``/models``, ``/embeddings``).
     The credential is optional (US-005). The chat-completions behaviour is
     ``LlamaSwapChatCompletionsClient``. Written independently of ``OpenAIAPIClient`` (DEC-arch-2).
@@ -437,6 +642,123 @@ class LlamaSwapAPIClient(LLMClient):
             **settings,
         }
 
+    def _responses_tool_input(
+        self,
+        history: list[dict[str, Any]],
+        carried: dict[int, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        """Convert the loop's internal copy into one round's ``input`` items (DEC-004-6, -7, -4).
+
+        By turn shape, in order:
+
+        - assistant turn with ``tool_calls`` → the carry items ``carried[<turn position>]`` (verbatim,
+          in order; none when the position is absent), then
+          ``{"type": "message", "role": "assistant", "content": <content>}`` only when its content is
+          non-empty text, then one ``{"type": "function_call", "call_id": <id>, "name": <name>,
+          "arguments": <text>}`` per call in order (mapping arguments as JSON text, missing as ``""``;
+          no server item id);
+        - ``role: tool`` turn → ``{"type": "function_call_output", "call_id": <tool_call_id>,
+          "output": <content as text>}``;
+        - any other turn → the item ``_responses_payload`` makes for it (assistant typed ``message``;
+          system and user bare ``{"role", "content"}``).
+
+        Args:
+            history: Internal copy in chat-completions turn shapes (system turn first when given);
+                never modified.
+            carried: Per-call record of reasoning items keyed by the position in ``history`` of the
+                assistant tool-call turn they belong to; never modified.
+
+        Returns:
+            A new list of input items; every item built here carries its ``type``.
+        """
+        items: list[dict[str, Any]] = []
+        for position, turn in enumerate(history):
+            tool_calls = turn.get("tool_calls")
+            if turn.get("role") == "assistant" and tool_calls:
+                # DEC-004-7: the round's reasoning goes ahead of its calls, as received; a caller
+                # history turn has no record and is sent without reasoning (DEC-004-6).
+                items.extend(carried.get(position, []))
+                content = turn.get("content")
+                # DEC-004-4: the round text travels as a typed message, and only when non-empty.
+                if isinstance(content, str) and content:
+                    items.append({"type": "message", "role": "assistant", "content": content})
+                for call in tool_calls:
+                    function = call.get("function") if isinstance(call, Mapping) else None
+                    if not isinstance(function, Mapping):
+                        function = {}
+                    arguments = function.get("arguments")
+                    # DEC-004-6: arguments travel as text — a mapping (caller history) as JSON
+                    # text, missing as "", text as given.
+                    if arguments is None:
+                        arguments = ""
+                    elif isinstance(arguments, Mapping):
+                        arguments = json.dumps(dict(arguments), ensure_ascii=False)
+                    elif not isinstance(arguments, str):
+                        arguments = str(arguments)
+                    items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": call.get("id") if isinstance(call, Mapping) else None,
+                            "name": function.get("name"),
+                            "arguments": arguments,
+                        }
+                    )
+            elif turn.get("role") == "tool":
+                output = turn.get("content")
+                # The output must be text: a raw JSON object gets 400 (context wire vocabulary).
+                # The loop's own turns already hold text; a caller's structured content is JSON text.
+                if output is None:
+                    output = ""
+                elif isinstance(output, (dict, list)):
+                    output = json.dumps(output, ensure_ascii=False, default=str)
+                elif not isinstance(output, str):
+                    output = str(output)
+                items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": turn.get("tool_call_id"),
+                        "output": output,
+                    }
+                )
+            else:
+                # Delegated so caller turns get exactly the chat path's item rule (DEC-003-11 as
+                # amended, DEC-004-4) without a second copy of it in this module.
+                single: list[Any] = [turn]
+                items.extend(self._responses_payload(single, system=None, settings={}, stream=False)["input"])
+        return items
+
+    def _responses_tools_payload(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        settings: dict[str, Any],
+        tools: list[dict[str, Any]],
+        stream: bool,
+    ) -> dict[str, Any]:
+        """Build one tool-round request body (DEC-004-10, DEC-003-11).
+
+        Args:
+            items: The round's input items (from ``_responses_tool_input``), sent as ``input``.
+            settings: Wire fields from ``_merge_options``, with ``text`` already set to the winning
+                translated response format (parameter over setting) or absent.
+            tools: Flattened tools (from ``_responses_tools``).
+            stream: Value of the always-present ``stream`` key.
+
+        Returns:
+            A new body holding exactly ``model``, ``input``, ``stream``, ``store: False``,
+            ``include: ["reasoning.encrypted_content"]``, ``tools`` and the ``settings`` fields.
+        """
+        # DEC-003-11 keys first, then `tools`; settings come from _merge_options and never hold these names.
+        return {
+            "model": self.model,
+            "input": items,
+            "stream": stream,
+            "store": False,
+            "include": ["reasoning.encrypted_content"],
+            "tools": tools,
+            **settings,
+        }
+
     async def _stream_responses_response(
         self,
         response: aiohttp.ClientResponse,
@@ -557,6 +879,235 @@ class LlamaSwapAPIClient(LLMClient):
         # The Responses form of DEC-001-1: without `response.completed` the reply is truncated,
         # even when a `[DONE]` sentinel arrived (llama.cpp never sends one).
         raise LLMError("llama-swap stream ended before the reply was complete")
+
+    async def _stream_responses_tool_round(
+        self,
+        response: aiohttp.ClientResponse,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read one streamed tool round's Responses events into round text, tool calls and carry items.
+
+        llama-swap's own tool-round parser (DEC-004-9, DEC-arch-2), separate from
+        ``_stream_responses_response`` (which is not changed). Payload strings are read only through
+        ``self._iter_sse_data(response)`` and decoded as in DEC-003-13: non-JSON payloads (including a
+        ``[DONE]`` sentinel), non-object values and objects without a string ``type`` are skipped.
+        Dispatch on ``type``:
+
+        - ``response.output_text.delta`` → text piece; ``response.reasoning_text.delta`` /
+          ``response.reasoning_summary_text.delta`` → reasoning piece. Markers per DEC-003-13 with
+          fresh marker state for this round; a block still open at ``response.completed`` is closed by
+          delivering ``</think>`` as its own piece, so the round's reasoning reaches the receiver
+          closed. Empty or missing deltas deliver nothing.
+        - ``response.output_item.added`` with a ``function_call`` item → starts a call keyed by the
+          item's ``id`` (fallback ``output_index``), taking ``call_id``, ``name`` and any initial
+          ``arguments``.
+        - ``response.function_call_arguments.delta`` → appends ``delta`` to the call keyed by
+          ``item_id`` (fallback ``output_index``); a delta for an unknown key starts a call with no
+          name.
+        - ``response.function_call_arguments.done`` and ``response.output_item.done`` with a
+          ``function_call`` item → string ``arguments`` replace the assembled text; a non-empty
+          ``call_id`` / ``name`` on the done item is set; a done item for an unknown key starts the
+          call.
+        - ``response.output_item.done`` with a ``reasoning`` item → carry item, kept verbatim and
+          recorded with its ``output_index`` (DEC-004-7).
+        - ``response.completed`` → the round is complete; returns at once, reads nothing further.
+        - ``response.failed``, ``response.incomplete``, ``error`` → ``LLMError`` carrying the
+          server's reason, as in DEC-003-13. Every other type is ignored.
+
+        Handles the llama.cpp sequence: created, in progress; reasoning item added at position 0 and
+        reasoning deltas; function-call item added at position 1 with name, call id and empty
+        arguments, then argument deltas; items finishing out of order (the reasoning item's done event
+        may arrive after the call's deltas or after text deltas); no
+        ``response.function_call_arguments.done`` event; ``response.completed`` with no ``[DONE]``.
+
+        Pieces are delivered to ``on_delta`` as parsed (result awaited only if awaitable,
+        DEC-000-23). Tool-call names and argument text are never delivered to the receiver.
+
+        Args:
+            response: The open streamed response (from ``_stream_post``); only passed to
+                ``_iter_sse_data``.
+            on_delta: Optional receiver of text and reasoning pieces; its failure propagates
+                unchanged and ends the read (no later piece is delivered).
+
+        Returns:
+            A triple, same shape as ``_responses_tool_round``:
+            the round text — text deltas only, joined, without reasoning or markers;
+            the tool calls as ``{"call_id", "name", "arguments"}`` dicts in order of first
+            appearance, numbered densely from 0 (missing values → ``None``; DEC-arch-10);
+            the reasoning carry items, verbatim, ordered by ``output_index`` regardless of the order
+            in which they finished.
+
+        Raises:
+            LLMError: A failed, incomplete or error event (carrying the server's reason); the stream
+                ended without ``response.completed`` (also after a ``[DONE]`` sentinel); a reader
+                failure from ``_iter_sse_data``.
+        """
+        text = ""
+        # True while a <think> block is open; fresh for every round so each round's reasoning is its
+        # own closed block (DEC-004-9, markers per DEC-003-13 / DEC-000-20).
+        in_reasoning = False
+        # Calls in order of first appearance (dense 0-based numbering, DEC-arch-10), each found by
+        # the server's item id and by its output position: llama.cpp deltas carry both, but either
+        # alone must still reach the call (DEC-004-9: key `id` / `item_id`, fallback `output_index`).
+        calls: list[dict[str, Any]] = []
+        by_id: dict[str, dict[str, Any]] = {}
+        by_index: dict[int, dict[str, Any]] = {}
+        # Reasoning carry items with their output position and arrival order; sorted at return
+        # because reasoning's done event can arrive after the call's deltas (DEC-004-9, DEC-004-7).
+        carry: list[tuple[float, int, dict[str, Any]]] = []
+
+        async def _deliver(piece: str) -> None:
+            # Receiver awaited only if awaitable; a failure propagates unchanged (DEC-000-23).
+            if on_delta is not None:
+                outcome = on_delta(piece)
+                if inspect.isawaitable(outcome):
+                    await outcome
+
+        def _find_call(item_id: Any, index: Any) -> dict[str, Any] | None:
+            # Item id first, output position as the fallback (DEC-004-9).
+            if isinstance(item_id, str) and item_id in by_id:
+                return by_id[item_id]
+            if isinstance(index, int) and index in by_index:
+                return by_index[index]
+            return None
+
+        def _start_call(item_id: Any, index: Any) -> dict[str, Any]:
+            # A call first seen through a delta or done event has no name yet; the offered check
+            # in `chat_with_tools` then ends the loop with LLMError (DEC-004-9, DEC-002-3).
+            call: dict[str, Any] = {"call_id": None, "name": None, "arguments": None}
+            calls.append(call)
+            if isinstance(item_id, str) and item_id:
+                by_id[item_id] = call
+            if isinstance(index, int):
+                by_index[index] = call
+            return call
+
+        def _register(call: dict[str, Any], item_id: Any, index: Any) -> None:
+            # Later events may carry a key the first one lacked; remember it so both lookups work.
+            if isinstance(item_id, str) and item_id and item_id not in by_id:
+                by_id[item_id] = call
+            if isinstance(index, int) and index not in by_index:
+                by_index[index] = call
+
+        def _set_identity(call: dict[str, Any], source: Mapping[str, Any]) -> None:
+            # Only non-empty text replaces what is known: an empty field on a done event must not
+            # erase the name / call id taken from the added event (DEC-004-9).
+            for key in ("call_id", "name"):
+                value = source.get(key)
+                if isinstance(value, str) and value:
+                    call[key] = value
+
+        async for data in self._iter_sse_data(response):
+            # Non-JSON payloads (including a `[DONE]` sentinel), non-objects and objects without a
+            # string `type` carry no event: skipped (DEC-003-13).
+            try:
+                event = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("type")
+            if not isinstance(kind, str):
+                continue
+
+            if kind == "response.output_text.delta":
+                delta = event.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                # The round text keeps the bare delta; only the receiver's piece carries the marker.
+                text += delta
+                piece = delta
+                if in_reasoning:
+                    piece = "</think>" + delta
+                    in_reasoning = False
+                await _deliver(piece)
+            elif kind in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
+                delta = event.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                if not in_reasoning:
+                    delta = "<think>" + delta
+                    in_reasoning = True
+                await _deliver(delta)
+            elif kind == "response.output_item.added":
+                item = event.get("item")
+                if not isinstance(item, dict) or item.get("type") != "function_call":
+                    continue
+                item_id, index = item.get("id"), event.get("output_index")
+                call = _find_call(item_id, index) or _start_call(item_id, index)
+                _register(call, item_id, index)
+                _set_identity(call, item)
+                arguments = item.get("arguments")
+                if isinstance(arguments, str) and call["arguments"] is None:
+                    call["arguments"] = arguments
+            elif kind == "response.function_call_arguments.delta":
+                delta = event.get("delta")
+                item_id, index = event.get("item_id"), event.get("output_index")
+                call = _find_call(item_id, index) or _start_call(item_id, index)
+                if isinstance(delta, str):
+                    call["arguments"] = (call["arguments"] or "") + delta
+            elif kind in ("response.function_call_arguments.done", "response.output_item.done"):
+                index = event.get("output_index")
+                if kind == "response.output_item.done":
+                    item = event.get("item")
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") == "reasoning":
+                        # Kept verbatim for the later rounds (DEC-004-7); the done event is the one
+                        # source of carry items (DEC-004-9 rejected reading `response.completed`).
+                        # An item without a position sorts after the positioned ones, in arrival order.
+                        position = index if isinstance(index, int) else float("inf")
+                        carry.append((position, len(carry), item))
+                        continue
+                    if item.get("type") != "function_call":
+                        continue
+                    source: Mapping[str, Any] = item
+                    item_id = item.get("id")
+                else:
+                    source = event
+                    item_id = event.get("item_id")
+                call = _find_call(item_id, index) or _start_call(item_id, index)
+                _register(call, item_id, index)
+                _set_identity(call, source)
+                # Full arguments replace the assembled deltas (DEC-004-9); llama.cpp sends them only
+                # on the item's done event, never an arguments-done event.
+                arguments = source.get("arguments")
+                if isinstance(arguments, str):
+                    call["arguments"] = arguments
+            elif kind == "response.completed":
+                # The round's only completion signal: close an open block as its own piece so the
+                # next round's pieces never land inside it, and return without reading further.
+                if in_reasoning:
+                    await _deliver("</think>")
+                reasoning = [item for _, _, item in sorted(carry, key=lambda entry: (entry[0], entry[1]))]
+                return text, calls, reasoning
+            elif kind == "response.failed":
+                body = event.get("response")
+                error = body.get("error") if isinstance(body, dict) else None
+                message = error.get("message") if isinstance(error, dict) else None
+                raise LLMError(
+                    "llama-swap reported a failed response",
+                    description=message if isinstance(message, str) else json.dumps(error),
+                )
+            elif kind == "response.incomplete":
+                body = event.get("response")
+                details = body.get("incomplete_details") if isinstance(body, dict) else None
+                reason = details.get("reason") if isinstance(details, dict) else None
+                raise LLMError(
+                    "llama-swap reported an incomplete response",
+                    description=reason if isinstance(reason, str) and reason else json.dumps(details),
+                )
+            elif kind == "error":
+                message = event.get("message")
+                raise LLMError(
+                    "llama-swap reported an error in the stream",
+                    description=message if isinstance(message, str) else json.dumps(event),
+                )
+            # Every other type (created, in_progress, content_part.*, output_text.done, ...) is ignored.
+
+        # Without `response.completed` the round is truncated, even after a `[DONE]` sentinel
+        # (DEC-004-9); no tool of this round runs.
+        raise LLMError("llama-swap stream ended before the tool round was complete")
 
     async def list_models(self) -> List[str]:
         """Return the ids of the models the server offers, in the server's order.
@@ -773,20 +1324,140 @@ class LlamaSwapAPIClient(LLMClient):
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Refuse tool conversations: not available on Responses until feature 004 (DEC-003-4).
+        """Run a tool conversation over Responses and return the final answer text (DEC-004-10, DEC-004-11).
 
-        Raises before settings are merged, so no request is sent and no
-        ``LLMSettingIgnoredWarning`` is emitted; never falls back to ``/chat/completions``.
-        Parameters are accepted only to keep the public signature.
+        llama-swap's own copy of the tool loop (DEC-arch-2). Order per call (002's rules):
+        pre-flight — every advertised name (``_tool_definition_name``) needs a callable in ``tools``,
+        else ``ValueError`` before any request; settings merged (``_merge_options``, may warn once per
+        client); internal copy of ``messages`` (system turn first when truthy); then inside
+        ``self._tracer.trace("chat_with_tools", self.model)`` (``log_system``, ``log_messages``), up
+        to ``max_loops`` rounds, each one ``POST /responses`` through ``self._request`` with body
+        ``_responses_tools_payload(_responses_tool_input(copy, carried), ...)`` — flattened tools,
+        ``stream`` false, ``text.format`` from the ``response_format`` parameter (else the setting)
+        translated per DEC-003-10, no ``text`` with neither; logged as
+        ``log_request("POST", "/responses (loop <n>)", payload)`` with n from 1. The reply is read by
+        ``_responses_tool_round``. No calls → ``log_response(text)`` and return. Calls → the
+        assistant tool-call turn is appended to the copy and the round's reasoning items recorded
+        under its position (call-local, never on messages); per call in order: offered check
+        (``_offered_tool_name``), ``_read_tool_arguments``, ``log_tool_call``, argument-name check,
+        run (awaited only if awaitable), ``_tool_result_text``, ``log_tool_result``, tool turn.
+        The final round's reasoning is never kept. The bearer header is sent only when the client
+        holds a credential. ``stream=True`` opens each round with ``_stream_post`` and reads it with
+        ``_stream_responses_tool_round`` (step 004), the receiver passed unwrapped.
+
+        Args:
+            messages: Conversation turns; never modified (tool-call / tool-result turns in it are
+                sent as function-call / function-call-output items).
+            tools_definitions: Advertised tools, nested or flat; never modified.
+            tools: Callables by tool name.
+            system: Optional system instruction.
+            max_loops: Round limit.
+            options: Per-call settings.
+            stream: Streamed rounds (step 004).
+            on_delta: Receiver of streamed pieces (step 004); not trace-wrapped.
+            response_format: Final-answer format; wins over the ``response_format`` setting.
+
+        Returns:
+            The final round's text (no reasoning, no markers).
 
         Raises:
-            NotImplementedError: Always; the message says tool conversations on Responses are not
-                available yet and names ``LlamaSwapChatCompletionsClient`` as the interim choice.
+            ValueError: An advertised tool has no callable (before any request); an argument name the
+                callable lacks (tool not run).
+            LLMError: Non-2xx reply (address and server reply) or transport failure; a ``failed`` /
+                ``incomplete`` round; a call naming an unoffered tool or with an empty / missing
+                name; arguments not JSON or not an object; an unserialisable result — each naming
+                the tool where there is one.
+            RuntimeError: A tool raised (names the tool; no further request); the round limit was
+                reached — text contains ``max_loops`` and its value, raised after the trace session.
         """
-        raise NotImplementedError(
-            "Tool conversations are not available on the Responses protocol yet; "
-            "use LlamaSwapChatCompletionsClient for tool conversations meanwhile."
-        )
+        # DEC-004-11 / DEC-004-5: pre-flight before merge and request, names nested or flat.
+        advertised = {_tool_definition_name(d) for d in tools_definitions}
+        missing = advertised - tools.keys()
+        if missing:
+            # key=str: a definition without a name contributes None, which cannot sort among text.
+            raise ValueError(f"Missing callables for tools {sorted(missing, key=str)}")
+        offered = {name for name in advertised if isinstance(name, str)}
+
+        # DEC-004-12: merged once per call, so a no-counterpart setting warns at most once and is
+        # absent from every round.
+        settings = self._merge_options(options=options)
+        # DEC-004-10 / DEC-001-15: a truthy parameter wins over the setting on every round; with
+        # neither, `settings` holds no `text`.
+        if response_format:
+            settings["text"] = {"format": _responses_text_format(response_format)}
+        flat_tools = _responses_tools(tools_definitions)
+
+        # Internal copy in chat-completions turn shapes (DEC-004-6); the caller's list is untouched.
+        msgs: list[dict[str, Any]] = list(messages)
+        if system:
+            msgs.insert(0, {"role": "system", "content": system})
+        # DEC-004-7: reasoning items of each tool round, keyed by the position of that round's
+        # assistant tool-call turn in `msgs`; local to this call, discarded when it ends.
+        carried: dict[int, list[dict[str, Any]]] = {}
+
+        with self._tracer.trace("chat_with_tools", self.model) as t:
+            t.log_system(system)
+            t.log_messages(msgs)
+
+            for loop_idx in range(max_loops):
+                items = self._responses_tool_input(msgs, carried)
+                payload = self._responses_tools_payload(items, settings=settings, tools=flat_tools, stream=stream)
+                # DEC-004-10: round number in the path, counted from 1.
+                t.log_request("POST", f"/responses (loop {loop_idx + 1})", payload)
+
+                if stream:
+                    # Step 004 parser; the receiver is passed raw (no trace wrapper on the tool path).
+                    async with self._stream_post("/responses", payload) as response:
+                        text, calls, reasoning = await self._stream_responses_tool_round(response, on_delta)
+                else:
+                    reply = await self._request("POST", "/responses", json=payload)
+                    text, calls, reasoning = _responses_tool_round(reply)
+
+                if not calls:
+                    # The final round's reasoning is dropped here, never sent (DEC-004-7).
+                    t.log_response(text)
+                    return text
+
+                carried[len(msgs)] = reasoning
+                msgs.append(
+                    {
+                        "role": "assistant",
+                        "content": text,
+                        "tool_calls": [
+                            {
+                                "id": call["call_id"],
+                                "type": "function",
+                                "function": {"name": call["name"], "arguments": call["arguments"]},
+                            }
+                            for call in calls
+                        ],
+                    }
+                )
+
+                for call in calls:
+                    # DEC-004-11 order: offered check, then argument reading, both before the tool can
+                    # run; calls earlier in this reply have already run and keep their effects.
+                    name = _offered_tool_name(call, offered)
+                    func = tools[name]
+                    kwargs = _read_tool_arguments(name, call.get("arguments"))
+                    t.log_tool_call(name, kwargs)
+                    if not all(k in inspect.signature(func).parameters for k in kwargs):
+                        raise ValueError(f"Bad args for tool '{name}': {kwargs}")
+                    try:
+                        result = func(**kwargs)
+                        if inspect.isawaitable(result):
+                            result = await result
+                    except Exception as exc:
+                        raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
+
+                    # Outside the try above, so a conversion failure stays LLMError and is not
+                    # reported as the tool's own failure (DEC-002-5).
+                    content = _tool_result_text(name, result)
+                    t.log_tool_result(name, content)
+                    msgs.append({"role": "tool", "content": content, "tool_call_id": call.get("call_id")})
+
+        # DEC-002-2: stays RuntimeError and outside the trace session; the text keeps `max_loops`.
+        raise RuntimeError(f"Tool loop reached its round limit (max_loops={max_loops}) without a final answer")
 
     async def embed_batch(
         self,
