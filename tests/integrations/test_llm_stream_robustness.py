@@ -1,6 +1,6 @@
 """Live tests: streamed chat delivers non-English text complete on llama-swap and OpenAI.
 
-Covers plan 001.core-fixes, step 003 (stream parsing), DoD-15 and DoD-16: every character of a
+Covers stream parsing (DEC-001-10), DoD-15 and DoD-16: every character of a
 reply in a non-ASCII script reaches the receiver, and the returned text equals the pieces
 received. Only robust properties are asserted (non-empty, returned == joined pieces, the
 expected script present, no replacement character), never exact model text.

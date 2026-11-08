@@ -132,7 +132,7 @@ def recursive_format_placeholders(text: str, data: Dict[str, str | bytes | int |
     def _fill(match: "re.Match[str]") -> str:
         """Return the text for one slot occurrence: its value as text, or the slot as written if unknown."""
         key = match.group(1)
-        # Membership test, then subscription (Step 005 context): a mapping that counts lookups observes
+        # Membership test, then subscription (lookup order kept by DEC-002-15): a mapping that counts lookups observes
         # exactly one test per slot occurrence per pass.
         if key in data:
             value = data[key]

@@ -1,11 +1,11 @@
-"""Unit tests for streamed tool conversations on the OpenAI Responses class (plan 004.responses-tools, step 002).
+"""Unit tests for streamed tool conversations on the OpenAI Responses class (DEC-004-9).
 
 Covers the tool-round stream parser ``OpenAIAPIClient._read_responses_tool_stream`` and the streamed branch of
 ``chat_with_tools``: one streamed ``/responses`` request per round whose body is the non-streamed round body with
 ``stream`` true (DEC-004-10), text and reasoning pieces with fresh per-round ``<think>`` / ``</think>`` markers,
 call assembly from tool-call events, reasoning carry items ordered by output position (DEC-004-7, DEC-004-9),
 failures inside rounds, receiver rules (DEC-000-23), requested formats and tracing. Fake streams reproduce both
-the OpenAI event sequence and the llama.cpp sequence of ``context.md`` § Responses wire vocabulary for tools.
+the OpenAI event sequence and the llama.cpp sequence seen in a probe (DEC-004-9).
 Every expected value comes from the step's Definition of done and the cited decisions.
 """
 
@@ -36,7 +36,7 @@ SYSTEM = "You use the tools you are given."
 # Thinking on, so the reasoning setting is part of every round's body (DEC-003-9, DEC-004-10).
 OPTIONS = {"temperature": 0.25, "max_tokens": 512, "enable_thinking": True}
 
-# Both stream dialects from context.md § Responses wire vocabulary for tools: OpenAI (summary deltas,
+# Both stream dialects (DEC-004-9, DEC-003-13; llama.cpp order from a probe): OpenAI (summary deltas,
 # arguments-done events, encrypted reasoning) and llama.cpp (reasoning-text deltas, no arguments-done,
 # reasoning finishing after the other items).
 FLAVOURS = [
@@ -99,7 +99,7 @@ class _ToolLog:
 
 
 # ---------------------------------------------------------------------------
-# Stream event builders (context.md § Responses wire vocabulary for tools; 002.context.md)
+# Stream event builders (Responses tool-round vocabulary: DEC-004-9, DEC-003-13)
 # ---------------------------------------------------------------------------
 
 
@@ -142,7 +142,7 @@ def _text_delta(index: int, item_id: str, delta: str) -> str:
 
 
 def _reasoning_delta(flavour: str, index: int, item_id: str, delta: str) -> str:
-    """OpenAI streams reasoning as summary deltas (002.context.md); llama.cpp as reasoning-text deltas."""
+    """OpenAI streams reasoning as summary deltas (DEC-003-13); llama.cpp as reasoning-text deltas."""
     if flavour == "openai":
         return _ev(
             "response.reasoning_summary_text.delta", item_id=item_id, output_index=index, summary_index=0, delta=delta
@@ -697,7 +697,7 @@ async def test_openai_tool_stream_parser_fresh_marker_state_each_round__DoD3(mon
 
 
 def _expected_call(call_id: str, name: str, arguments: str) -> dict[str, Any]:
-    """A tool call in the internal assistant-turn shape frozen for the round result (status.md ## Skeleton)."""
+    """A tool call in the internal assistant-turn shape that a tool round returns (DEC-004-11)."""
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 

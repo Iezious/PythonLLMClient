@@ -1,4 +1,4 @@
-"""Live tests for OpenAI on both chat protocols (plan 003.responses-chat, step 003, DoD-12..15).
+"""Live tests for OpenAI on both chat protocols (DEC-arch-12, DEC-003-15, DoD-12..15).
 
 Every chat operation except tool chat is checked on Responses and on chat completions through the factory
 (``protocol`` omitted for Responses, ``"chat_completions"`` for the other), plus thinking on / off and server
@@ -86,7 +86,7 @@ _MARKER = re.compile(r"(<think>|</think>)")
 
 
 def _assert_reasoning_well_formed(text: str) -> None:
-    """A well-formed reasoning block (context.md § Test conventions).
+    """A well-formed reasoning block (DEC-005-6).
 
     Opening and closing markers are balanced and alternate, every block is closed, the first block comes before
     the answer text, and some answer text lies outside the blocks.

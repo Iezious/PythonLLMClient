@@ -1,5 +1,5 @@
 """Unit tests for a reply cut at the app's own output limit on the OpenAI Responses class
-(plan 003.responses-chat, step 006; DEC-arch-13, DEC-003-17..20).
+(DEC-arch-13, DEC-003-17..20).
 
 When the app set the output limit (``max_tokens`` or its ``context_length`` alias, as a call option or a client
 default), a non-streamed reply with status ``incomplete`` and reason exactly ``max_output_tokens``, or a matching

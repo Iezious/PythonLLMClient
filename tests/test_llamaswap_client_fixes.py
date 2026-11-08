@@ -1,14 +1,14 @@
-"""Unit tests for the llama-swap client fixes of feature 001.core-fixes, step 005.
+"""Unit tests for the llama-swap client fixes of feature 001 (DEC-001-7, 8, 12..16).
 
 Covers, on ``LlamaSwapChatCompletionsClient``: streamed requests opened through the base streamed-request
 helper (credential header, non-2xx and transport failures as ``LLMError``, pieces delivered in
 order), null reply content returned as empty text, and the settings rules (no built-in values,
 stop / token bias / end-user id / response format sent, response-format precedence, merge rules,
-thinking switch, embedding end-user id). Each test names the step-005 DoD clause it covers.
+thinking switch, embedding end-user id). Each test names the DoD clause it covers.
 
-Feature 003.responses-chat, step 001: these tests now build ``LlamaSwapChatCompletionsClient`` (the
-chat-completions regression suite, DoD-11), and the last section checks that its ``chat`` posts to
-``/chat/completions`` (DoD-9 of that step, tagged ``__s001_DoD9``).
+Since feature 003 these tests build ``LlamaSwapChatCompletionsClient`` (the chat-completions regression
+suite, DEC-arch-12, DEC-003-7), and the last section checks that its ``chat`` posts to
+``/chat/completions`` (DEC-arch-1; tests tagged ``__s001_DoD9``).
 """
 
 import copy
@@ -899,13 +899,13 @@ async def test_llamaswap_embed_batch_client_user_when_call_has_none__DoD15(monke
 
 
 # ---------------------------------------------------------------------------
-# Feature 003.responses-chat, step 001: chat goes to /chat/completions (DoD-9)
+# Chat-completions class: chat goes to /chat/completions (DEC-arch-1, DoD-9)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_llamaswap_chat_completions_chat_posts_to_chat_completions__s001_DoD9(monkeypatch):
-    """003 step 001 DoD-9 (US-056.AC-2): a non-streamed ``chat`` sends one ``POST /chat/completions``."""
+    """DoD-9 (US-056.AC-2, DEC-arch-1): a non-streamed ``chat`` sends one ``POST /chat/completions``."""
     client = _client()
     captured = _fake_request(monkeypatch, client, [_reply("ok")])
 
@@ -916,7 +916,7 @@ async def test_llamaswap_chat_completions_chat_posts_to_chat_completions__s001_D
 
 @pytest.mark.asyncio
 async def test_llamaswap_chat_completions_streamed_chat_posts_to_chat_completions__s001_DoD9():
-    """003 step 001 DoD-9 (US-056.AC-2): a streamed ``chat`` also sends its request to ``/chat/completions``."""
+    """DoD-9 (US-056.AC-2, DEC-arch-1): a streamed ``chat`` also sends its request to ``/chat/completions``."""
     client = _client()
     session = _FakeSession(body=_complete_stream("hi"))
     client.session = session

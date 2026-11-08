@@ -1,4 +1,4 @@
-"""Unit tests for streamed chat on the llama-swap Responses class (feature 003.responses-chat, step 005).
+"""Unit tests for streamed chat on the llama-swap Responses class (DEC-003-13).
 
 Covers ``LlamaSwapAPIClient``'s Responses stream handling (DEC-003-13): the streamed request to
 ``/responses`` and its body, text and reasoning pieces with per-run think markers, completion and
@@ -33,7 +33,7 @@ _MESSAGES = [{"role": "user", "content": "Hello"}]
 
 
 # ---------------------------------------------------------------------------
-# Event builders (Responses stream vocabulary, context.md § Responses wire vocabulary)
+# Event builders (Responses stream vocabulary: DEC-003-13, DEC-arch-11)
 # ---------------------------------------------------------------------------
 
 

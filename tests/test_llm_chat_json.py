@@ -1,8 +1,8 @@
-"""JSON-only answers (``chat_json``) on the OpenAI-family clients (plan 002.edge-fixes, step 003).
+"""JSON-only answers (``chat_json``) on the OpenAI-family clients (DEC-002-7).
 
 Covers the parse-only check (DEC-002-7): with an expected shape whose fields have no defaults, any valid
 single JSON value is returned unchanged on ``OpenAIChatCompletionsClient`` and ``LlamaSwapChatCompletionsClient``
-(the chat-completions regression suite, feature 003 step 001 DoD-11); a reply that is not JSON ends with
+(the chat-completions regression suite, DEC-arch-12); a reply that is not JSON ends with
 ``LLMError`` when a shape is given and is returned as is without one. Every expected value comes from the
 step's Definition of done (DoD-15, DoD-16).
 """

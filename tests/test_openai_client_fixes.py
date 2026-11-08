@@ -1,4 +1,4 @@
-"""Unit tests for the OpenAI client fixes (plan 001.core-fixes, step 004).
+"""Unit tests for the OpenAI client fixes of feature 001 (decisions cited below).
 
 Covers the app-provided credential and its refusal (DEC-001-5/6), streamed requests through the base
 helper with non-2xx and transport failures as ``LLMError`` (DEC-001-7/8), null reply content as empty
@@ -6,9 +6,9 @@ text (DEC-001-12), only app-set settings sent plus the offered keys (DEC-001-13/
 precedence (DEC-001-2/15), the unchanged merge and thinking rules, and the embedding end-user id rule
 (DEC-001-16). Every expected value comes from the step's Definition of done and the cited decisions.
 
-Feature 003.responses-chat, step 001: these tests now build ``OpenAIChatCompletionsClient`` (the
-chat-completions regression suite, DoD-11), and the last section checks that its ``chat`` posts to
-``/chat/completions`` (DoD-9 of that step, tagged ``__s001_DoD9``).
+Since feature 003 these tests build ``OpenAIChatCompletionsClient`` (the chat-completions regression
+suite, DEC-arch-12, DEC-003-7), and the last section checks that its ``chat`` posts to
+``/chat/completions`` (DEC-arch-1; tests tagged ``__s001_DoD9``).
 """
 
 import json
@@ -833,13 +833,13 @@ async def test_openai_embed_batch_client_user_when_call_has_none__DoD19(monkeypa
 
 
 # ---------------------------------------------------------------------------
-# Feature 003.responses-chat, step 001: chat goes to /chat/completions (DoD-9)
+# Chat-completions class: chat goes to /chat/completions (DEC-arch-1, DoD-9)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_openai_chat_completions_chat_posts_to_chat_completions__s001_DoD9(monkeypatch):
-    """003 step 001 DoD-9 (US-056.AC-2): a non-streamed ``chat`` sends one ``POST /chat/completions``."""
+    """DoD-9 (US-056.AC-2, DEC-arch-1): a non-streamed ``chat`` sends one ``POST /chat/completions``."""
     client = _client()
     records = _capture_requests(monkeypatch, client, [_reply("ok")])
 
@@ -850,7 +850,7 @@ async def test_openai_chat_completions_chat_posts_to_chat_completions__s001_DoD9
 
 @pytest.mark.asyncio
 async def test_openai_chat_completions_streamed_chat_posts_to_chat_completions__s001_DoD9():
-    """003 step 001 DoD-9 (US-056.AC-2): a streamed ``chat`` also sends its request to ``/chat/completions``."""
+    """DoD-9 (US-056.AC-2, DEC-arch-1): a streamed ``chat`` also sends its request to ``/chat/completions``."""
     client = _client()
     session = _stream_session(_sse(_delta_frame("ok"), _FINISH_FRAME, "[DONE]"))
     client.session = session

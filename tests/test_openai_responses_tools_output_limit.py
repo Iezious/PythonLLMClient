@@ -1,5 +1,5 @@
 """Unit tests for a tool round cut at the app's own output limit on the OpenAI Responses class
-(plan 004.responses-tools, step 005; DEC-arch-13 tool part, DEC-004-15..18, DEC-003-17..20).
+(DEC-arch-13 tool part, DEC-004-15..18, DEC-003-17..20).
 
 When the app set the output limit (``max_tokens`` or its ``context_length`` alias, as a call option or a client
 default), a ``chat_with_tools`` round that the server stops for the output limit (non-streamed: status

@@ -1,6 +1,6 @@
 """Repeated template filling (`recursive_format_placeholders`).
 
-Covers plan 002.edge-fixes, step 005 (DEC-002-15): filling stops after the first pass that changes
+Covers DEC-002-15: filling stops after the first pass that changes
 nothing, keeps its 10-pass cap, fills slots found inside values, evaluates computed values only when
 their slot appears, and passes their errors through (US-054, US-055).
 """
@@ -16,7 +16,7 @@ from llm.llm import recursive_format_placeholders
 class CountingData(dict):
     """A mapping that counts membership tests per key.
 
-    The step context says the helper looks up the data with a membership test per slot per pass,
+    The helper looks up the data with a membership test per slot per pass (its lookup order, kept by DEC-002-15),
     so the number of membership tests for a slot that occurs once equals the number of passes that
     saw it. This is how the tests observe when filling stops (DoD-1).
     """

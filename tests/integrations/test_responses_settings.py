@@ -1,11 +1,11 @@
-"""Live settings and answer-format tests on the Responses classes (feature 005, step 002).
+"""Live settings and answer-format tests on the Responses classes (DEC-005-8, DEC-005-12).
 
 Covers, on ``OpenAIAPIClient`` and ``LlamaSwapAPIClient`` against real servers: a reply cut at the token cap the
 app set is returned as text with no error and no library notice, in ``chat`` and ``generate``, streamed and not,
 with the cap per call or as a client default (US-062, DEC-arch-13, DEC-005-12); a no-counterpart setting is
 dropped with one warning per client; ``json_schema`` answers in ``chat`` and ``chat_json``; and accepted
 sampling / reasoning-effort settings.
-Plan: ``docs/plans/005.responses-live-tests/002.settings-formats.md``. Test-only (DEC-005-1): a failure caused
+Test-only (DEC-005-1): a failure caused
 by the library is a finding, never a reason to weaken a check here.
 """
 
@@ -26,7 +26,7 @@ from tests.integrations.live_support import (
 )
 
 # ---------------------------------------------------------------------------
-# Module-local inputs and helpers (step 002 Interface intent)
+# Module-local inputs and helpers (DEC-005-2)
 # ---------------------------------------------------------------------------
 
 #: The token cap of DEC-005-8: 16 is OpenAI's lowest accepted output cap, so the call is valid and is cut
@@ -41,7 +41,7 @@ _IGNORED_SETTING_OPTIONS: dict[str, Any] = {_IGNORED_SETTING: 7}
 _REQUIRED_KEYS = ("title", "pages")
 
 #: Sampling settings with a Responses counterpart (DEC-003-9); used on the plain models only, since
-#: reasoning models may refuse them (002.context.md).
+#: reasoning models may refuse them (no DEC records this).
 _SAMPLING_OPTIONS: dict[str, Any] = {"temperature": 0.7, "top_p": 0.9}
 
 #: DEC-005-9: llama.cpp's schema grammar is known to fail on the server; non-strict so a fixed server
@@ -91,7 +91,7 @@ def _json_schema() -> dict[str, Any]:
 
 
 def _json_schema_format() -> dict[str, Any]:
-    """The ``json_schema`` ``response_format`` in today's nested shape (002.context.md; flattened by DEC-003-10)."""
+    """The ``json_schema`` ``response_format`` in today's nested shape (flattened by DEC-003-10)."""
     return {
         "type": "json_schema",
         "json_schema": {"name": "library_book", "schema": _json_schema()},
@@ -102,7 +102,7 @@ def _ignored_warnings(caught: list[warnings.WarningMessage]) -> list[warnings.Wa
     """Keep only ``LLMSettingIgnoredWarning`` records.
 
     The filter matters: unrelated warnings (aiohttp, pydantic) recorded in the same block must not change
-    the once-per-client count (002.context.md, DEC-005-5).
+    the once-per-client count (DEC-003-6, DEC-005-5).
     """
     return [w for w in caught if issubclass(w.category, LLMSettingIgnoredWarning)]
 
@@ -155,7 +155,7 @@ async def _run_capped(
     The call runs inside ``catch_warnings(record=True)`` + ``simplefilter("always")`` so no notice is hidden by
     Python's de-duplication. An ``LLMError`` is turned into a test failure naming the rule it breaks (a cut at
     the app's own cap is not an error, DEC-arch-13). Only the structure of DEC-005-6 is checked afterwards by
-    the caller: never the exact text, never whether the reply was in fact cut (002.context.md).
+    the caller: never the exact text, never whether the reply was in fact cut (DEC-005-12).
 
     Returns:
         The call's return value and the recorder (``None`` when not streamed).
@@ -239,8 +239,8 @@ async def _assert_chat_json_schema(backend: str) -> None:
 async def _assert_chat_json_with_schema_format(backend: str) -> None:
     """``chat_json`` with the ``json_schema`` format in options and an expected shape (DoD-5).
 
-    ``response_schema`` only turns on the parse check (002.context.md); the format in options drives the
-    server.
+    ``response_schema`` only turns on the parse check (interfaces.md § Exposed: client method contract); the
+    format in options drives the server.
     """
     client = build_client(backend)
     async with client:
@@ -426,7 +426,7 @@ async def test_openai_reasoning_effort_medium_accepted__DoD7() -> None:
     """OpenAI reasoning model with reasoning_effort "medium" returns non-empty text with no marker (DoD-7).
 
     Skips without a key (the builder's key reader). The effort is not combined with sampling settings,
-    which reasoning models may refuse (002.context.md).
+    which reasoning models may refuse (no DEC records this).
     """
     client = build_client("openai", openai_reasoning_model())
     async with client:

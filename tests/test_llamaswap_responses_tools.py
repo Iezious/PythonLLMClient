@@ -1,13 +1,13 @@
 """Unit tests for the llama-swap Responses tool conversation, non-streamed.
 
-Feature 004.responses-tools, step 003. Covers ``LlamaSwapAPIClient.chat_with_tools`` with ``stream=False``:
+Covers ``LlamaSwapAPIClient.chat_with_tools`` with ``stream=False``:
 tool flattening (DEC-004-5, DEC-004-1), the per-round ``POST /responses`` body (DEC-004-10), the response
 format on every round, calls / results / assistant text as typed input items (DEC-004-6, DEC-004-4),
 reasoning carried verbatim to later rounds (DEC-004-7), round reading (DEC-004-8), 002's tool-loop rules
 (DEC-004-11), failures, the ignored-setting warning (DEC-004-12), tracing and the end of the 003 refusal.
 The server is faked through ``_request`` (one canned reply per round, DEC-004-14) or, where headers or
 non-2xx replies matter, through a fake ``aiohttp`` session. Replies use the llama.cpp probe shapes
-(``docs/plans/004.responses-tools/context.md`` § Responses wire vocabulary for tools). Each test names its DoD id.
+(DEC-004-8, DEC-004-9; interfaces.md § Consumed: backend APIs). Each test names its DoD id.
 """
 
 import copy
@@ -79,7 +79,7 @@ def _tool_def(name: str, **function_fields: Any) -> dict[str, Any]:
 
 def _reasoning(text: str, item_id: str = "rs_1") -> dict[str, Any]:
     """A reasoning output item exactly as llama.cpp sends it: plain reasoning text, empty summary and
-    empty encrypted content (probe shape, 003.context.md § Wire notes)."""
+    empty encrypted content (probe shape, recorded in DEC-003-2's evidence)."""
     return {
         "type": "reasoning",
         "id": item_id,
@@ -1129,7 +1129,7 @@ async def test_llamaswap_incomplete_later_round_ends_with_llmerror_carrying_reas
 @pytest.mark.asyncio
 async def test_llamaswap_non_2xx_round_ends_with_llmerror_with_address_and_reply__DoD17():
     """DoD-17: a 404 with a JSON error body ends with LLMError carrying the address and the server's reply
-    (US-060.AC-1, 003.context.md § Wire notes)."""
+    (US-060.AC-1, DEC-000-11; llama.cpp answers an unknown model this way)."""
     error_body = {"error": {"code": 404, "message": "could not find suitable model xyz", "type": "not_found_error"}}
     client = _client()
     session = _FakeSession([(404, error_body)])

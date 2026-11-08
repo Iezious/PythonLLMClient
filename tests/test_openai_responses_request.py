@@ -1,4 +1,4 @@
-"""Unit tests for the OpenAI Responses class, non-streamed path (plan 003.responses-chat, step 002).
+"""Unit tests for the OpenAI Responses class, non-streamed path (DEC-003-9..12).
 
 Covers the Responses request body (DEC-003-11), reply text extraction and failed / incomplete replies
 (DEC-003-12), the settings mapping and the ignored-setting warning (DEC-003-9, DEC-003-6, DEC-003-1), the

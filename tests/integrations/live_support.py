@@ -1,4 +1,4 @@
-"""Shared helpers for the live Responses tests of feature 005.responses-live-tests (step 001, DEC-005-2).
+"""Shared helpers for the live Responses tests of feature 005 (DEC-005-2).
 
 Holds the server / model / key readers (DEC-005-3), the Responses client builder (DEC-005-4), the piece
 recorder, the reasoning-marker checks (DEC-005-6) and the secret-free error check. Only the live files

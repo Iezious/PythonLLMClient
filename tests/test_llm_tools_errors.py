@@ -1,6 +1,6 @@
 """Tool-loop error mapping in ``chat_with_tools`` on the OpenAI and llama-swap clients.
 
-Covers feature 002.edge-fixes, step 001 (``docs/plans/002.edge-fixes/001.tool-loop-errors.md``): unoffered or
+Covers DEC-002-2..5 (with the unchanged rules reproduced in DEC-004-11): unoffered or
 unnamed tools, unreadable arguments, unserialisable results and the round-limit error, plus the failure kinds
 that must stay unchanged. Every scenario runs on both clients, streamed and non-streamed.
 """

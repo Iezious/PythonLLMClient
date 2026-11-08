@@ -1,14 +1,14 @@
 """OpenAI Chat Completions client (``OpenAIChatCompletionsClient``): the app's credential, shared helpers, settings.
 
-A renamed copy of the pre-Responses ``llm/openai.py`` (feature 003 step 001, DEC-003-7): same behaviour,
+A renamed copy of the pre-Responses ``llm/openai.py`` (feature 003, DEC-003-7): same behaviour,
 tables and helpers; it changes only for chat-completions fixes, never for Responses work (DEC-arch-2).
 History carried over from the source module:
 
 Fixes from feature 001: credential only from ``bearer_token``, streamed requests via ``_stream_post``,
 null reply content as empty text, and only app-set settings sent.
-Feature 002 step 001: the tool loop maps an unoffered tool, unreadable arguments and an
+Feature 002: the tool loop maps an unoffered tool, unreadable arguments and an
 unserialisable result to ``LLMError`` and names the round limit in its error (DEC-002-2..5).
-Feature 002 step 003: embeddings and model-list replies are checked, embeddings ordered by
+Feature 002: embeddings and model-list replies are checked, embeddings ordered by
 position, and unreadable bodies mapped to ``LLMError`` (DEC-002-8..10);
 ``chat_json`` checks only the JSON parse (DEC-002-7).
 """
@@ -152,7 +152,7 @@ async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str
     try:
         return await client._request(method, path, **kwargs)
     # DEC-002-10: only the two decode errors ``_request`` lets escape on a 2xx JSON body are mapped;
-    # a broad ValueError catch could swallow unrelated errors (003.context.md). ``_request`` is not edited.
+    # a broad ValueError catch could swallow unrelated errors. ``_request`` is not edited.
     except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
         raise LLMError(f"Unreadable reply from OpenAI API when {operation}", description=str(exc)) from exc
 
@@ -184,7 +184,7 @@ def _reply_entries(response: Any, operation: str) -> list[Any]:
             description=_reply_text(response),
         )
     if "data" not in response:
-        # Wording kept as before this step; older tests may match it (003.context.md § Message wording).
+        # Wording kept from before DEC-002-8 / DEC-002-9; older tests may match it.
         raise LLMError(f"Invalid response from OpenAI API when {operation}: {response}")
     entries = response["data"]
     if not isinstance(entries, list):
@@ -265,7 +265,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         )
     indices = [entry.get("index") for entry in entries]
     # DEC-002-8: positions are used only when every entry has one; a bool is an int subclass but is
-    # not a position (003.context.md § Positions). Partial positions are ambiguous, so server order.
+    # not a position (DEC-002-8). Partial positions are ambiguous, so server order.
     if not all(isinstance(index, int) and not isinstance(index, bool) for index in indices):
         return [entry["embedding"] for entry in entries]
     if sorted(indices) != list(range(count)):
@@ -657,7 +657,7 @@ class OpenAIChatCompletionsClient(LLMClient):
                 )
 
                 for call in tool_calls:
-                    # Step 001 order: offered check, then argument reading, both before the tool can
+                    # DEC-002-3 / DEC-002-4 order: offered check, then argument reading, both before the tool can
                     # run; calls earlier in this reply have already run and keep their effects.
                     name = _offered_tool_name(call, advertised)
                     func = tools[name]

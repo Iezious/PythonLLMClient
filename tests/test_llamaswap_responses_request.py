@@ -1,12 +1,12 @@
 """Unit tests for the llama-swap Responses client: settings, request and non-streamed reply.
 
-Feature 003.responses-chat, step 004. Covers ``LlamaSwapAPIClient`` on the Responses protocol for
+Covers ``LlamaSwapAPIClient`` on the Responses protocol for
 non-streamed ``chat``, ``generate`` and ``chat_json``: the exact request body (DEC-003-11), the settings
 mapping and the ignored-setting warning (DEC-003-9, DEC-003-6), thinking as the reasoning effort without a
 summary (DEC-003-1, DEC-003-2), the text-format translation (DEC-003-10), reply extraction and failed /
 incomplete replies (DEC-003-12), non-2xx failures, the optional credential, the unchanged model-list /
 embedding operations and tracing. Each test names its DoD id. (003's tool-chat refusal test, DoD-14, was
-removed by feature 004 step 003, which replaces the refusal with the Responses tool loop.)
+removed by feature 004, which replaces the DEC-003-4 refusal with the Responses tool loop.)
 """
 
 import copy

@@ -1,4 +1,4 @@
-"""Unit tests for trace robustness (plan 002.edge-fixes, step 004).
+"""Unit tests for trace robustness (DEC-002-11..14, DEC-002-16).
 
 Covers: a record that cannot be set up leaves the call untraced (DEC-002-11); a record-write failure never
 replaces the call's result or error and never leaks the file (DEC-002-12); exclusive record creation with a
@@ -136,6 +136,7 @@ def _install_flaky_open(monkeypatch, fail_on: str | None = None) -> list[_FlakyF
         opened.append(wrapped)
         return wrapped
 
+    # raising=False: llm.trace has no module-level ``open`` attribute; the patch shadows the builtin there.
     monkeypatch.setattr(llm.trace, "open", fake_open, raising=False)
     return opened
 
@@ -146,6 +147,7 @@ def _install_refusing_open(monkeypatch) -> None:
     def refusing_open(file, mode="r", *args, **kwargs):
         raise PermissionError(13, "Permission denied", str(file))
 
+    # raising=False: llm.trace has no module-level ``open`` attribute; the patch shadows the builtin there.
     monkeypatch.setattr(llm.trace, "open", refusing_open, raising=False)
 
 

@@ -1,6 +1,6 @@
 """Unit tests for llama-swap Responses tool conversations: a round cut at the app's own output limit.
 
-Feature 004.responses-tools, step 006 (DEC-arch-13 tool part; DEC-004-15..18, DEC-003-17..20). Covers
+Per DEC-arch-13 (tool part), DEC-004-15..18 and DEC-003-17..20, covers
 ``LlamaSwapAPIClient.chat_with_tools`` (streamed and not), the module-level tool-round reader
 ``_responses_tool_round`` and the tool-round stream parser ``_stream_responses_tool_round``: with the app's
 limit set (``max_tokens`` or the ``context_length`` alias, call option or client default), a round whose

@@ -1,4 +1,4 @@
-"""Unit tests for streamed tool conversations on the llama-swap Responses class (feature 004.responses-tools, step 004).
+"""Unit tests for streamed tool conversations on the llama-swap Responses class (DEC-004-9).
 
 Covers ``LlamaSwapAPIClient.chat_with_tools(stream=True)`` and its tool-round stream parser
 ``_stream_responses_tool_round`` (DEC-004-9): one streamed ``/responses`` request per round with the
@@ -43,7 +43,7 @@ _ARG_DELTAS = ['{"key"', ': "alp', 'ha-7"}']
 
 
 # ---------------------------------------------------------------------------
-# Event and item builders (context.md § Responses wire vocabulary for tools)
+# Event and item builders (Responses tool-round vocabulary: DEC-004-9, DEC-003-13)
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +78,7 @@ def _reasoning_item(item_id: str, text: str) -> dict[str, Any]:
 
 
 def _reasoning_added(index: int, item_id: str) -> str:
-    """The reasoning ``output_item.added`` event exactly as llama.cpp sends it (004.context.md probe details)."""
+    """The reasoning ``output_item.added`` event exactly as llama.cpp sends it (probe shape, no DEC)."""
     item = {
         "type": "reasoning",
         "id": item_id,
@@ -170,7 +170,7 @@ _CALL_1 = _call_item("fc_1", "call_1", "fetch_record", _FULL_ARGS)
 
 
 def _llamacpp_tool_round() -> list[str]:
-    """The llama.cpp tool-round sequence (step DoD-4, context.md § wire vocabulary), in this exact order.
+    """The llama.cpp tool-round sequence (DoD-4; probe order, DEC-004-9), in this exact order.
 
     created, in progress; reasoning added at 0 then its deltas; call added at 1 with name, call id and
     empty arguments, then argument deltas; the call done with full arguments; the reasoning done after the

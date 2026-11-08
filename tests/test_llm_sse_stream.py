@@ -1,6 +1,6 @@
 """Unit tests for the shared chat-completions stream reader and both stream parsers.
 
-Covers plan 001.core-fixes, step 003 (stream parsing): the SSE reader rules of DEC-001-10
+Covers stream parsing: the SSE reader rules of DEC-001-10
 (incremental UTF-8, LF / CRLF / CR terminators, multi-line events, ignored fields, final
 event), transport failures while reading (DEC-001-7, DEC-001-1), error frames and malformed
 frames (DEC-001-9), the early-end rule (DEC-001-1), reasoning plus content in one piece
@@ -11,7 +11,7 @@ bytes (drives the real reader), and a stubbed ``_iter_sse_data`` that yields can
 payloads (drives a parser alone; the parser then gets ``response=None``).
 
 DoD-14 (the existing ``tests/test_llm_tools_reasoning_stream.py`` passes unchanged) is covered
-by that file itself, which this step does not edit.
+by that file itself, which is not edited for these tests.
 """
 
 import json

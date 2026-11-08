@@ -1,4 +1,4 @@
-"""Live failure tests on the Responses classes (feature 005.responses-live-tests, step 003, DoD-1..4).
+"""Live failure tests on the Responses classes (DEC-005-8, DoD-1..4).
 
 A bad OpenAI credential (non-streamed and streamed) must end with ``LLMError`` carrying the refusal status
 and the server's reply but never the credential (DEC-000-11, DEC-arch-5). A closed local port must end

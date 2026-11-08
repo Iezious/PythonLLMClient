@@ -1,9 +1,8 @@
 """Package-surface tests: packaging contract and public exports.
 
-Feature 001.core-fixes, step 001: pydantic is a declared runtime dependency (DoD-1 of that step).
-Feature 003.responses-chat, step 001: the chat-completions classes and the ignored-setting warning
-category are exported (DoD-1, DoD-2) and the package version is 0.2.0, identical in
-``pyproject.toml`` and ``llm.__version__`` (DoD-10).
+pydantic is a declared runtime dependency (DEC-001-3); the chat-completions classes and the
+ignored-setting warning category are exported (DEC-003-7, DEC-003-5); the package version is 0.2.0,
+identical in ``pyproject.toml`` and ``llm.__version__`` (DEC-001-4, DEC-004-3).
 """
 
 import re
@@ -44,42 +43,42 @@ def _requirement_name(requirement: str) -> str:
 
 
 def test_pydantic_is_a_runtime_dependency__DoD1():
-    """001.core-fixes DoD-1: the declared runtime dependencies (not only an extra) include pydantic."""
+    """DEC-001-3: the declared runtime dependencies (not only an extra) include pydantic."""
     runtime_deps = _project_table().get("dependencies", [])
     names = {_requirement_name(req) for req in runtime_deps}
     assert "pydantic" in names
 
 
 def test_pyproject_version_is_0_2_0__DoD10():
-    """DoD-10: the version declared in ``pyproject.toml`` is 0.2.0."""
+    """DEC-004-3: the version declared in ``pyproject.toml`` is 0.2.0."""
     assert _project_table()["version"] == _EXPECTED_VERSION
 
 
 def test_package_version_is_0_2_0__DoD10():
-    """DoD-10: ``llm.__version__`` is 0.2.0."""
+    """DEC-004-3: ``llm.__version__`` is 0.2.0."""
     assert llm.__version__ == _EXPECTED_VERSION
 
 
 def test_package_version_matches_pyproject__DoD10():
-    """DoD-10: ``llm.__version__`` equals the version declared in ``pyproject.toml``."""
+    """DEC-001-4: ``llm.__version__`` equals the version declared in ``pyproject.toml``."""
     assert llm.__version__ == _project_table()["version"]
 
 
 def test_new_names_are_listed_in_all__DoD1():
-    """DoD-1: both chat-completions classes and the warning category are listed in ``llm.__all__``."""
+    """DEC-003-7, DEC-003-5: both chat-completions classes and the warning category are listed in ``llm.__all__``."""
     for name in ("OpenAIChatCompletionsClient", "LlamaSwapChatCompletionsClient", "LLMSettingIgnoredWarning"):
         assert name in llm.__all__, name
         assert hasattr(llm, name), name
 
 
 def test_responses_names_keep_their_exports__DoD1():
-    """DoD-1 (Interface intent): ``OpenAIAPIClient`` / ``LlamaSwapAPIClient`` stay exported."""
+    """DEC-003-7: ``OpenAIAPIClient`` / ``LlamaSwapAPIClient`` stay exported."""
     assert "OpenAIAPIClient" in llm.__all__
     assert "LlamaSwapAPIClient" in llm.__all__
 
 
 def test_chat_completions_classes_are_distinct_clients__DoD1():
-    """DoD-1: each chat-completions class is a client class distinct from its Responses counterpart."""
+    """DEC-003-7: each chat-completions class is a client class distinct from its Responses counterpart."""
     assert isinstance(OpenAIChatCompletionsClient, type)
     assert isinstance(LlamaSwapChatCompletionsClient, type)
     assert issubclass(OpenAIChatCompletionsClient, LLMClient)

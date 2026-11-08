@@ -190,7 +190,7 @@ class LLMClient:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         remainder = ""
         # True when the last text seen ended with a CR that was taken as a terminator: if the next read
-        # starts with LF, the pair is one CRLF and the LF must not end an extra (empty) line (DoD-2).
+        # starts with LF, the pair is one CRLF and the LF must not end an extra (empty) line (DEC-001-10).
         skip_lf = False
         data_lines: list[str] = []
         url = getattr(response, "url", "")
@@ -597,7 +597,7 @@ class LLMClient:
                 call_id = tc.get("id")
                 name = func.get("name")
                 idx = tc.get("index")
-                # 002.context Rules: only a real integer is a position; bool is excluded because
+                # DEC-002-6: only a real integer is a position; bool is excluded because
                 # True/False are not positions a server means to send.
                 if isinstance(idx, int) and not isinstance(idx, bool):
                     if idx not in tool_call_map:

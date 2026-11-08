@@ -13,7 +13,7 @@ from llm.tools import pydantic_to_openai_tool
 def _openai_api_key() -> str:
     """Return the OpenAI key from the test's own environment, skipping the test when absent.
 
-    Step 004 DoD-20: the test reads the key and passes it as ``bearer_token``; the library never
+    The test reads the key and passes it as ``bearer_token``; the library never
     reads the environment itself (DEC-001-6).
     """
     key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPEN_AI_KEY")

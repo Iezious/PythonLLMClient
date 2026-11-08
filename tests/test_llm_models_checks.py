@@ -1,7 +1,7 @@
-"""Model-list reply checks on the OpenAI-family clients (plan 002.edge-fixes, step 003).
+"""Model-list reply checks on the OpenAI-family clients (DEC-002-9, DEC-002-10).
 
 Covers ``list_models`` and ``get_models`` on ``OpenAIChatCompletionsClient`` and
-``LlamaSwapChatCompletionsClient`` (the chat-completions regression suite, feature 003 step 001 DoD-11): ids in the
+``LlamaSwapChatCompletionsClient`` (the chat-completions regression suite, DEC-arch-12): ids in the
 server's order and entries returned exactly as sent, and malformed or unreadable replies ending with
 ``LLMError`` from both methods (DEC-002-9, DEC-002-10). Every expected value comes from the step's
 Definition of done (DoD-11..DoD-14) and its decisions.

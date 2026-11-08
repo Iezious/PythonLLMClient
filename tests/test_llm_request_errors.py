@@ -1,4 +1,4 @@
-"""Request-error tests for the base client (feature 001.core-fixes, step 002).
+"""Request-error tests for the base client (DEC-001-7, DEC-001-8).
 
 Covers the transport-failure mapping of ``LLMClient._request`` (DEC-001-7), the unchanged non-2xx mapping
 (DEC-000-11), the streamed-request helper ``LLMClient._stream_post`` (DEC-001-8, DEC-arch-5), and the effect of
@@ -34,7 +34,7 @@ class _ReceiverFailure(Exception):
 
 
 class _FakeContent:
-    """Minimal stand-in for ``response.content``; this step never reads the stream itself."""
+    """Minimal stand-in for ``response.content``; these tests never read the stream itself."""
 
     async def iter_chunked(self, _n: int):
         for chunk in ():

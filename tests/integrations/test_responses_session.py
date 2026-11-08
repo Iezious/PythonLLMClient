@@ -1,4 +1,4 @@
-"""Live session, embedding and model-record tests on the Responses classes (feature 005, step 003, DoD-5..9).
+"""Live session, embedding and model-record tests on the Responses classes (DEC-005-10, DoD-5..9).
 
 Runs against real OpenAI and llama-swap servers: four concurrent calls on one client inside one usage
 scope and reuse of that client after the scope closes (DEC-005-10, DEC-000-24); ``embed``, ``embed_batch``

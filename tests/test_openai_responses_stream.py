@@ -1,4 +1,4 @@
-"""Unit tests for streamed chat on the OpenAI Responses class (plan 003.responses-chat, step 003).
+"""Unit tests for streamed chat on the OpenAI Responses class (DEC-003-13).
 
 Covers the Responses stream parser ``OpenAIAPIClient._read_responses_stream`` and the streamed ``chat`` /
 ``generate`` path: the single streamed request to ``/responses`` (DEC-003-11, DEC-003-16), text and reasoning
@@ -39,7 +39,7 @@ PROMPT = "Name a fruit."
 
 
 # ---------------------------------------------------------------------------
-# Stream event builders (Responses wire vocabulary, context.md; DEC-003-13)
+# Stream event builders (Responses wire vocabulary: DEC-003-13, DEC-arch-11)
 # ---------------------------------------------------------------------------
 
 

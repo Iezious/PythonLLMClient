@@ -1,11 +1,11 @@
 """Live checks of a reply cut at the app's own token cap in tool chat and checked JSON on the Responses classes.
 
-Feature 005, step 005 (``docs/plans/005.responses-live-tests/005.output-limit-tools-json.md``). On
+Per DEC-005-13 and DEC-005-14, on
 ``OpenAIAPIClient`` and ``LlamaSwapAPIClient`` against real servers: a tool conversation whose final answer is
 cut at the cap the app set returns the cut answer, streamed and not (US-062.AC-4), and a checked JSON answer cut
 at that cap ends with ``LLMError`` like any invalid JSON answer (US-062.AC-5). Test-only (DEC-005-1): a failure
 caused by the library is a finding, never a reason to weaken a check here. Nothing is imported from another
-step's test file (DEC-005-2); no check is marked as an expected failure (DoD-3, DEC-005-14).
+live test file (DEC-005-2); no check is marked as an expected failure (DoD-3, DEC-005-14).
 """
 
 import copy
@@ -24,7 +24,7 @@ from tests.integrations.live_support import (
 )
 
 # ---------------------------------------------------------------------------
-# Module-local inputs and helpers (step 005 Interface intent)
+# Module-local inputs and helpers (DEC-005-2)
 # ---------------------------------------------------------------------------
 
 #: The app's token cap of DEC-005-8, set as a call option so "the app set the limit" holds (DEC-arch-13).
@@ -42,7 +42,7 @@ _NO_TOOL_SYSTEM = (
 _TOOL_NAME = "query_index"
 _TOOL_VALUE = "ZR4-8813-quill"
 
-#: The one neutral tool in today's nested ``function`` definition shape, one text argument (005.context.md).
+#: The one neutral tool in today's nested ``function`` definition shape, one text argument (DEC-arch-10, DEC-005-13).
 _TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -143,7 +143,7 @@ async def _run_cut_tool_conversation(backend: str, *, stream: bool) -> tuple[str
     """Run the capped tool conversation and return ``(reply, recorder)``; checks no error and no notice.
 
     One neutral tool offered, the long-answer prompt, the no-tool system instruction and the cap as a call
-    option; ``max_loops`` stays at its default (005.context.md). OpenAI uses ``OPENAI_MODEL`` and llama-swap
+    option; ``max_loops`` stays at its default (DEC-005-13). OpenAI uses ``OPENAI_MODEL`` and llama-swap
     runs thinking off, both through the builder (DEC-005-12, DEC-005-4). The warning block surrounds the call
     with ``simplefilter("always")`` so de-duplication can neither hide nor fake a notice (DEC-005-5).
     """
@@ -184,7 +184,7 @@ async def _assert_cut_tool_answer_streamed(backend: str) -> None:
     """DoD-2 body: the streamed cut answer is returned, contained in the recorder output, well-formed, no notice.
 
     Containment, not equality: on the tool path the receiver gets every round's pieces while only the final
-    answer is returned (004.context.md § Streamed answer containment).
+    answer is returned (interfaces.md § Streaming callback; DEC-005-13).
     """
     reply, recorder = await _run_cut_tool_conversation(backend, stream=True)
     assert recorder is not None

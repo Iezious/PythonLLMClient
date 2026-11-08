@@ -1,13 +1,13 @@
-"""Unit tests for the OpenAI Responses class, non-streamed tool conversation (plan 004.responses-tools, step 001).
+"""Unit tests for the OpenAI Responses class, non-streamed tool conversation (DEC-004-5..12).
 
 Covers ``OpenAIAPIClient.chat_with_tools`` on the Responses protocol: tool flattening (DEC-004-5, DEC-004-1),
 the per-round request body and response format (DEC-004-10), round reading (DEC-004-8), the round input items
 and the reasoning carried between rounds (DEC-004-6, DEC-004-7, DEC-004-4), stage-001 tool-loop rules
 (DEC-004-11, DEC-002-2..5), round failures and non-2xx replies (DEC-003-12), the ignored-setting warning
 (DEC-004-12) and tracing. The server is faked through the ``_request`` seam with one canned reply per round,
-or through a fake session (DEC-004-14). Replies follow the probe shapes of the plan's wire vocabulary, with
-both llama.cpp-style and OpenAI-style reasoning items. Every expected value comes from the step's Definition
-of done and the cited decisions; error texts are checked loosely (tool name, key words), never verbatim.
+or through a fake session (DEC-004-14). Replies follow probed server shapes (interfaces.md § Consumed: backend
+APIs), with both llama.cpp-style and OpenAI-style reasoning items. Every expected value comes from the step's
+Definition of done and the cited decisions; error texts are checked loosely (tool name, key words), never verbatim.
 """
 
 import asyncio
@@ -90,7 +90,7 @@ def _openai_reasoning(item_id: str, text: str) -> dict:
     }
 
 
-# Both server styles of reasoning item, so carry-over is checked verbatim for each (001.context.md).
+# Both server styles of reasoning item, so carry-over is checked verbatim for each (DEC-004-7).
 _REASONING_STYLES = {"llamacpp": _llama_reasoning, "openai": _openai_reasoning}
 
 

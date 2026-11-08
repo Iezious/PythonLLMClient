@@ -1,6 +1,6 @@
 """Streamed tool-call fragment assembly in the shared tool-stream parser.
 
-Feature 002.edge-fixes, step 002 (DEC-002-6): `LLMClient._stream_openai_tools_response` groups
+Per DEC-002-6, `LLMClient._stream_openai_tools_response` groups
 positioned fragments by position (name set, not appended) and positionless fragments by call id and
 name, returning positioned calls by position and then positionless calls in order of appearance.
 The parser is driven directly by feeding canned `data:` payloads through a stubbed `_iter_sse_data`.
@@ -49,7 +49,7 @@ def _fragment(
     """A tool-call fragment; `index=None` omits the position entirely (unlike the older helper).
 
     Any non-None `index` is sent as given, so a non-integer value can be used to exercise the
-    "non-integer index counts as no position" rule (002.context.md).
+    "non-integer index counts as no position" rule (DEC-002-6).
     """
     func: dict[str, Any] = {}
     if name is not None:

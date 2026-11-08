@@ -1,4 +1,4 @@
-"""Live conversation tests on the Responses classes (feature 005.responses-live-tests, step 001, DoD-1..7).
+"""Live conversation tests on the Responses classes (DEC-005-7, DoD-1..7).
 
 Runs against real OpenAI and llama-swap servers: the builder's class, multi-turn history (non-streamed
 and streamed), the uppercase-only system instruction on ``chat`` and ``generate``, non-English streaming,

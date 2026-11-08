@@ -1,11 +1,11 @@
 """OpenAI Responses client: chat, generate and JSON-only answers over ``POST /responses``.
 
-Feature 003 step 002: settings translated to Responses fields and no-counterpart settings dropped
+Feature 003: settings translated to Responses fields and no-counterpart settings dropped
 with ``LLMSettingIgnoredWarning`` (DEC-003-6, DEC-003-9, DEC-003-10); request body and non-streamed
-reply handling per DEC-003-11 / DEC-003-12. Step 003: streamed ``chat`` / ``generate`` parse the
-Responses event stream (DEC-003-13). Feature 004 step 001: ``chat_with_tools`` runs the tool loop
+reply handling per DEC-003-11 / DEC-003-12; streamed ``chat`` / ``generate`` parse the
+Responses event stream (DEC-003-13). Feature 004: ``chat_with_tools`` runs the tool loop
 on Responses (flattened tools, call / result items, reasoning carried between rounds; DEC-004-5..11),
-replacing the DEC-003-4 refusal; step 002: streamed tool rounds read by a separate tool-round
+replacing the DEC-003-4 refusal; streamed tool rounds are read by a separate tool-round
 parser (DEC-004-9). Model listing and
 embeddings are unchanged from the chat-completions client (US-057.AC-2), which now lives in
 ``llm/openai_chat_completions.py``.
@@ -72,7 +72,7 @@ async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str
     try:
         return await client._request(method, path, **kwargs)
     # DEC-002-10: only the two decode errors ``_request`` lets escape on a 2xx JSON body are mapped;
-    # a broad ValueError catch could swallow unrelated errors (003.context.md). ``_request`` is not edited.
+    # a broad ValueError catch could swallow unrelated errors. ``_request`` is not edited.
     except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
         raise LLMError(f"Unreadable reply from OpenAI API when {operation}", description=str(exc)) from exc
 
@@ -104,7 +104,7 @@ def _reply_entries(response: Any, operation: str) -> list[Any]:
             description=_reply_text(response),
         )
     if "data" not in response:
-        # Wording kept as before this step; older tests may match it (003.context.md § Message wording).
+        # Wording kept from before DEC-002-8 / DEC-002-9; older tests may match it.
         raise LLMError(f"Invalid response from OpenAI API when {operation}: {response}")
     entries = response["data"]
     if not isinstance(entries, list):
@@ -185,7 +185,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         )
     indices = [entry.get("index") for entry in entries]
     # DEC-002-8: positions are used only when every entry has one; a bool is an int subclass but is
-    # not a position (003.context.md § Positions). Partial positions are ambiguous, so server order.
+    # not a position (DEC-002-8). Partial positions are ambiguous, so server order.
     if not all(isinstance(index, int) and not isinstance(index, bool) for index in indices):
         return [entry["embedding"] for entry in entries]
     if sorted(indices) != list(range(count)):
@@ -257,9 +257,10 @@ def _responses_reply_text(response: Any, *, output_limit_set: bool = False) -> s
     Raises:
         LLMError: ``status`` is ``"failed"`` -- description is ``error.message`` when ``error`` is a
             mapping with a string ``message``, else the ``error`` value as JSON text; or ``status`` is
-            ``"incomplete"`` -- description is ``incomplete_details.reason`` when present, else the
-            ``incomplete_details`` value as JSON text -- unless ``output_limit_set`` is true and the
-            reason is exactly ``"max_output_tokens"`` (then the text is returned, DEC-003-19). Any other
+            ``"incomplete"`` -- description is ``incomplete_details.reason`` when it is a non-empty
+            string, else the ``incomplete_details`` value as JSON text (DEC-003-21) -- unless
+            ``output_limit_set`` is true and the reason is exactly ``"max_output_tokens"`` (then the
+            text is returned, DEC-003-19). Any other
             or missing status extracts the text.
             A reply that is not a mapping surfaces as a generic error.
     """
@@ -280,7 +281,13 @@ def _responses_reply_text(response: Any, *, output_limit_set: bool = False) -> s
         # DEC-arch-13 / DEC-003-18: only the exact string reason, and only when the app set the limit,
         # is a cut the app asked for; it falls through to the completed-reply extraction (DEC-003-19).
         if not (output_limit_set and isinstance(detail_reason, str) and detail_reason == "max_output_tokens"):
-            reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
+            # DEC-003-21: the reason is the description only as a non-empty string; otherwise the
+            # details go as JSON text, so an empty or non-string reason never hides what the server sent.
+            reason = (
+                detail_reason
+                if isinstance(detail_reason, str) and detail_reason
+                else json.dumps(details, default=str)
+            )
             # DEC-003-12: any other cut-off answer is never returned as if complete.
             raise LLMError("OpenAI Responses reply is incomplete", description=reason)
 
@@ -807,8 +814,9 @@ class OpenAIAPIClient(LLMClient):
         - ``response.failed`` -> ``LLMError``, description ``response.error.message`` when a string,
           else ``response.error`` as JSON text.
         - ``response.incomplete`` -> ``LLMError``, description ``response.incomplete_details.reason``
-          when present, else that value as JSON text -- except when ``output_limit_set`` is true and
-          that ``reason`` is exactly ``"max_output_tokens"`` (DEC-003-18): the stream was cut at the
+          when it is a non-empty string, else that value as JSON text (DEC-003-21) -- except when
+          ``output_limit_set`` is true and that ``reason`` is exactly ``"max_output_tokens"``
+          (DEC-003-18): the stream was cut at the
           app's own output limit and ends exactly as at ``response.completed`` (an open reasoning
           block is closed by its own ``</think>`` piece, nothing further is read or delivered, the
           return equals what the receiver got; DEC-arch-13, DEC-003-19).
@@ -911,7 +919,13 @@ class OpenAIAPIClient(LLMClient):
                     if in_reasoning:
                         await _deliver("</think>")
                     return "".join(delivered)
-                reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
+                # DEC-003-21: the reason is the description only as a non-empty string; otherwise the
+                # details go as JSON text, so an empty or non-string reason never hides what the server sent.
+                reason = (
+                    detail_reason
+                    if isinstance(detail_reason, str) and detail_reason
+                    else json.dumps(details, default=str)
+                )
                 # Same wording as the non-streamed check (DEC-003-12): any other cut-off answer is an error.
                 raise LLMError("OpenAI Responses reply is incomplete", description=reason)
             elif event_type == "error":
@@ -1004,7 +1018,7 @@ class OpenAIAPIClient(LLMClient):
         by_item_id: dict[str, dict[str, Any]] = {}
         by_output_index: dict[Any, dict[str, Any]] = {}
         # (output_index, arrival order, item): sorted at completion because reasoning items can finish
-        # after the call's deltas (probe in context.md); arrival order breaks ties stably.
+        # after the call's deltas (probe, DEC-004-9); arrival order breaks ties stably.
         carried: list[tuple[Any, int, dict[str, Any]]] = []
 
         async def _deliver(piece: str) -> None:
@@ -1156,7 +1170,13 @@ class OpenAIAPIClient(LLMClient):
                     and detail_reason == "max_output_tokens"
                 ):
                     return await _end_round()
-                reason = str(detail_reason) if detail_reason is not None else json.dumps(details, default=str)
+                # DEC-003-21: the reason is the description only as a non-empty string; otherwise the
+                # details go as JSON text, so an empty or non-string reason never hides what the server sent.
+                reason = (
+                    detail_reason
+                    if isinstance(detail_reason, str) and detail_reason
+                    else json.dumps(details, default=str)
+                )
                 raise LLMError("OpenAI Responses reply is incomplete", description=reason)
             elif event_type == "error":
                 message = event.get("message")

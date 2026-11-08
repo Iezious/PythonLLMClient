@@ -1,4 +1,4 @@
-"""Live tests of llama-swap on both chat protocols (feature 003.responses-chat, step 005, DoD-13..15).
+"""Live tests of llama-swap on both chat protocols (DEC-arch-12, DEC-003-15, DoD-13..15).
 
 Every non-tool chat operation runs on the Responses class and on the chat-completions class, both
 built through the factory; thinking on / off / explicit effort and failure cases run on Responses.
@@ -72,7 +72,7 @@ async def _streamed_chat(client, messages: list[LLMMessage], **kwargs: Any) -> t
 
 
 def _assert_well_formed_reasoning_before_answer(text: str) -> None:
-    """A well-formed reasoning block (context.md § Test conventions): markers balanced, never nested,
+    """A well-formed reasoning block (DEC-005-6): markers balanced, never nested,
     every block closed, the first block before the answer text, and answer text after the last block."""
     markers = _MARKER.findall(text)
     assert markers, "expected a reasoning block"

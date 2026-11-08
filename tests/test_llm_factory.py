@@ -1,10 +1,10 @@
 """Factory tests for ``get_llm_client``.
 
-Feature 001.core-fixes, step 001: the factory forwards the app's credential to the OpenAI client
-(DoD-4 of that step), still forwards it to llama-swap and builds llama-swap without one, and
-refuses an unknown server type (DoD-5); those tests now build the chat-completions classes
-(feature 003 step 001, DoD-11).
-Feature 003.responses-chat, step 001: the ``protocol`` argument picks the Responses or the
+Feature 001 (DEC-001-5): the factory forwards the app's credential to the OpenAI client
+(DoD-4), still forwards it to llama-swap and builds llama-swap without one, and
+refuses an unknown server type (DoD-5, DEC-000-3); those tests now build the chat-completions classes
+(DEC-arch-12).
+Feature 003 (DEC-003-8, DEC-arch-4): the ``protocol`` argument picks the Responses or the
 chat-completions class (DoD-3, DoD-4), never depending on the address (DoD-5); unknown protocol
 values (DoD-6) and any protocol on Ollama (DoD-7) are refused; the earlier refusals still hold
 (DoD-8).
@@ -76,7 +76,7 @@ def test_factory_refuses_unknown_server_type__DoD5():
     assert "no-such-backend" in str(exc_info.value)
 
 
-# --- Feature 003.responses-chat, step 001: the protocol argument --------------------------------
+# --- Feature 003: the protocol argument (DEC-003-8, DEC-arch-4) --------------------------------
 
 
 def test_openai_factory_without_protocol_returns_responses_class__DoD3():

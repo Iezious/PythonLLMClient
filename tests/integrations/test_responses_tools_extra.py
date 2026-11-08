@@ -1,4 +1,4 @@
-"""Extra live tool conversations on the Responses classes (feature 005.responses-live-tests, step 004, DoD-1..5).
+"""Extra live tool conversations on the Responses classes (DEC-005-11, DoD-1..5).
 
 Runs ``chat_with_tools`` against real OpenAI and llama-swap servers beyond feature 004's own live tests
 (DEC-004-13): two tool calls non-streamed and streamed, a caller history that already holds tool turns,
@@ -130,7 +130,7 @@ _SCHEMA_FORMAT: dict[str, Any] = {
 
 
 def _history_with_tool_turns() -> list[dict[str, Any]]:
-    """Caller history with a prior tool round (DoD-3; DEC-005-11, 004.context.md shape).
+    """Caller history with a prior tool round (DoD-3; DEC-005-11 shape).
 
     User turn, assistant turn with empty content and one tool call (``call_prev_c`` for record C), the
     matching tool-result turn, then a user turn asking about C's value and to fetch record D.
@@ -206,7 +206,8 @@ async def _history_with_tool_turns_not_streamed(backend: str) -> None:
     """DoD-3 body: a call over caller-supplied tool turns completes non-empty; the caller's list is unchanged."""
     tool = _RecordTool()
     messages = _history_with_tool_turns()
-    # A deep copy taken before the call is what the list must still equal afterwards (004.context.md).
+    # A deep copy taken before the call is what the list must still equal afterwards (interfaces.md § Exposed:
+    # client method contract).
     before = copy.deepcopy(messages)
     client = build_client(backend)
     async with client:

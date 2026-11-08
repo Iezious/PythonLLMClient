@@ -1,13 +1,13 @@
 """Unit tests for llama-swap Responses chat: a reply cut at the app's own output limit is returned.
 
-Feature 003.responses-chat, step 007 (DEC-arch-13; DEC-003-17..20). Covers ``LlamaSwapAPIClient``'s chat-style
+Per DEC-arch-13 and DEC-003-17..20, covers ``LlamaSwapAPIClient``'s chat-style
 calls (``chat``, ``generate``, ``chat_json``; streamed and not), the module-level reply reader
 ``_responses_reply_text`` and the stream parser ``_stream_responses_response``: a reply or ``response.incomplete``
 event whose reason is exactly ``max_output_tokens`` is returned like a completed reply when the app set the
 output limit (``max_tokens`` or the ``context_length`` alias, call option or default), and stays ``LLMError``
 when the app set no limit, for every other incomplete reason, and for failed / error / unfinished streams.
 The server is faked through the DEC-003-16 seams (``_request``, ``_stream_post``, ``_iter_sse_data``).
-Each test names its DoD id. DoD-12 is covered by the existing suite (``007.context.md``), not here.
+Each test names its DoD id. DoD-12 (no app limit) is covered by the existing incomplete-reply tests, not here.
 """
 
 import copy

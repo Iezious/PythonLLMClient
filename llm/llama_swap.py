@@ -1,12 +1,12 @@
 """llama-swap Responses client: optional credential, Responses request/reply for chat, generate and JSON answers.
 
-Feature 003 step 004 rewrites ``LlamaSwapAPIClient`` for the Responses protocol (``POST /responses``,
+Feature 003 rewrites ``LlamaSwapAPIClient`` for the Responses protocol (``POST /responses``,
 DEC-003-9..12, DEC-003-2); its chat-completions behaviour lives on in ``llm/llama_swap_chat_completions.py``.
-Step 005 adds the streamed path: its own Responses event parser (DEC-003-13, DEC-arch-2).
-Feature 004 step 003 adds the non-streamed tool loop on Responses: tool flattening, typed call/result
-items, per-call reasoning carry (DEC-004-5..12), all its own copy (DEC-arch-2); step 004 adds the
+The streamed path has its own Responses event parser (DEC-003-13, DEC-arch-2).
+Feature 004 adds the non-streamed tool loop on Responses: tool flattening, typed call/result
+items, per-call reasoning carry (DEC-004-5..12), all its own copy (DEC-arch-2), and the
 streamed tool rounds with their own tool-round event parser (DEC-004-9).
-Model listing and embeddings keep the reply checks of feature 002 step 003 (DEC-002-8..10).
+Model listing and embeddings keep the reply checks of feature 002 (DEC-002-8..10).
 """
 
 from collections.abc import Mapping
@@ -69,7 +69,8 @@ def _responses_text_format(response_format: Any) -> Any:
         ``{"type": "json_object"}`` and ``{"type": "text"}`` unchanged; for
         ``{"type": "json_schema", "json_schema": {...}}`` a new mapping ``{"type": "json_schema", ...}``
         with every key of the nested mapping (``name``, ``schema``, ``strict``, ``description``, ...)
-        lifted beside ``type``; any other value (including an already flat Responses format) unchanged.
+        lifted beside ``type`` except a nested ``type``, which is dropped so the type stays
+        ``"json_schema"``; any other value (including an already flat Responses format) unchanged.
         The input value is never modified. No validation; never raises.
     """
     if not isinstance(response_format, Mapping):
@@ -78,7 +79,8 @@ def _responses_text_format(response_format: Any) -> Any:
     # Only the chat-completions json_schema shape (nested mapping) is flattened; a flat Responses
     # json_schema format has no "json_schema" mapping and passes through unchanged (DEC-003-10).
     if response_format.get("type") == "json_schema" and isinstance(nested, Mapping):
-        return {"type": "json_schema", **nested}
+        # ``type`` stays "json_schema" even if the nested mapping happens to carry its own (DEC-003-10).
+        return {"type": "json_schema", **{k: v for k, v in nested.items() if k != "type"}}
     return response_format
 
 
@@ -106,8 +108,8 @@ def _responses_reply_text(reply: Any, *, output_limit_set: bool = False) -> str:
         LLMError: ``status == "failed"`` — description ``error.message`` when ``error`` is a mapping
             with a string message, else ``error`` as JSON text; ``status == "incomplete"`` other
             than the cut at the app's limit above (flag off, any other or missing reason, missing
-            or null ``incomplete_details``) — description ``incomplete_details.reason`` when
-            present, else ``incomplete_details`` as JSON text. A reply that is not a mapping
+            or null ``incomplete_details``) — description ``incomplete_details.reason`` when it is
+            a non-empty string, else ``incomplete_details`` as JSON text (DEC-003-21). A reply that is not a mapping
             surfaces as a generic error (accepted).
 
     Note:
@@ -132,8 +134,11 @@ def _responses_reply_text(reply: Any, *, output_limit_set: bool = False) -> str:
             output_limit_set and isinstance(details, Mapping) and details.get("reason") == "max_output_tokens"
         )
         if not cut_at_app_limit:
-            if isinstance(details, Mapping) and details.get("reason") is not None:
-                reason = str(details["reason"])
+            # DEC-003-21: the reason is the description only as a non-empty string; otherwise the
+            # details go as JSON text, so an empty or non-string reason never hides what the server sent.
+            detail_reason = details.get("reason") if isinstance(details, Mapping) else None
+            if isinstance(detail_reason, str) and detail_reason:
+                reason = detail_reason
             else:
                 reason = json.dumps(details, ensure_ascii=False, default=str)
             raise LLMError("llama-swap Responses reply is incomplete", description=reason)
@@ -398,7 +403,7 @@ async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str
     try:
         return await client._request(method, path, **kwargs)
     # DEC-002-10: only the two decode errors ``_request`` lets escape on a 2xx JSON body are mapped;
-    # a broad ValueError catch could swallow unrelated errors (003.context.md). ``_request`` is not edited.
+    # a broad ValueError catch could swallow unrelated errors. ``_request`` is not edited.
     except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
         raise LLMError(f"Unreadable reply from llama-swap when {operation}", description=str(exc)) from exc
 
@@ -430,7 +435,7 @@ def _reply_entries(response: Any, operation: str) -> list[Any]:
             description=_reply_text(response),
         )
     if "data" not in response:
-        # Wording kept as before this step; older tests may match it (003.context.md § Message wording).
+        # Wording kept from before DEC-002-8 / DEC-002-9; older tests may match it.
         raise LLMError(f"Invalid response from llama-swap when {operation}: {response}")
     entries = response["data"]
     if not isinstance(entries, list):
@@ -511,7 +516,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         )
     indices = [entry.get("index") for entry in entries]
     # DEC-002-8: positions are used only when every entry has one; a bool is an int subclass but is
-    # not a position (003.context.md § Positions). Partial positions are ambiguous, so server order.
+    # not a position (DEC-002-8). Partial positions are ambiguous, so server order.
     if not all(isinstance(index, int) and not isinstance(index, bool) for index in indices):
         return [entry["embedding"] for entry in entries]
     if sorted(indices) != list(range(count)):
@@ -744,7 +749,7 @@ class LlamaSwapAPIClient(LLMClient):
                     )
             elif turn.get("role") == "tool":
                 output = turn.get("content")
-                # The output must be text: a raw JSON object gets 400 (context wire vocabulary).
+                # The output must be text: a raw JSON object gets 400 (DEC-004-6; seen in a probe).
                 # The loop's own turns already hold text; a caller's structured content is JSON text.
                 if output is None:
                     output = ""
@@ -1463,7 +1468,7 @@ class LlamaSwapAPIClient(LLMClient):
         run (awaited only if awaitable), ``_tool_result_text``, ``log_tool_result``, tool turn.
         The final round's reasoning is never kept. The bearer header is sent only when the client
         holds a credential. ``stream=True`` opens each round with ``_stream_post`` and reads it with
-        ``_stream_responses_tool_round`` (step 004), the receiver passed unwrapped.
+        ``_stream_responses_tool_round`` (DEC-004-9), the receiver passed unwrapped.
 
         Output limit (DEC-004-15..18, DEC-arch-13): whether the app set it is computed once per call
         as "the merged wire settings hold ``max_output_tokens``" (call option or client default,
@@ -1484,8 +1489,8 @@ class LlamaSwapAPIClient(LLMClient):
             system: Optional system instruction.
             max_loops: Round limit.
             options: Per-call settings.
-            stream: Streamed rounds (step 004).
-            on_delta: Receiver of streamed pieces (step 004); not trace-wrapped.
+            stream: Streamed rounds (DEC-004-9).
+            on_delta: Receiver of streamed pieces (DEC-004-9); not trace-wrapped.
             response_format: Final-answer format; wins over the ``response_format`` setting.
 
         Returns:
@@ -1540,7 +1545,7 @@ class LlamaSwapAPIClient(LLMClient):
                 t.log_request("POST", f"/responses (loop {loop_idx + 1})", payload)
 
                 if stream:
-                    # Step 004 parser; the receiver is passed raw (no trace wrapper on the tool path).
+                    # DEC-004-9 parser; the receiver is passed raw (no trace wrapper on the tool path).
                     async with self._stream_post("/responses", payload) as response:
                         text, calls, reasoning = await self._stream_responses_tool_round(
                             response, on_delta, output_limit_set=output_limit_set

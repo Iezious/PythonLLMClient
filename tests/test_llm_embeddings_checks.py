@@ -1,7 +1,7 @@
-"""Embedding reply checks on the OpenAI-family clients (plan 002.edge-fixes, step 003).
+"""Embedding reply checks on the OpenAI-family clients (DEC-002-8, DEC-002-10).
 
 Covers ``embed_batch`` and ``embed`` on ``OpenAIChatCompletionsClient`` and ``LlamaSwapChatCompletionsClient``
-(the chat-completions regression suite, feature 003 step 001 DoD-11): one vector per text, ordering by
+(the chat-completions regression suite, DEC-arch-12): one vector per text, ordering by
 position when every entry carries an integer position (DEC-002-8), malformed and unreadable replies ending
 with ``LLMError`` (DEC-002-8, DEC-002-10), and request-helper refusals passing through unchanged. Every
 expected value comes from the step's Definition of done (DoD-1..DoD-10) and its decisions.
@@ -133,7 +133,7 @@ def _content_type_error() -> aiohttp.ContentTypeError:
 # ---------------------------------------------------------------------------
 
 # DoD-3: replies whose entries do not all carry an integer position keep the server's order.
-# "Integer position" excludes booleans and text (003.context.md § Positions); partial positions keep server order.
+# "Integer position" excludes booleans and text (DEC-002-8); partial positions keep server order.
 SERVER_ORDER_CASES = [
     pytest.param(
         TEXTS,

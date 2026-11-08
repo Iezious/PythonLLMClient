@@ -1,4 +1,4 @@
-"""Live tool-conversation tests on llama-swap (feature 004.responses-tools, step 004, DoD-15..17).
+"""Live tool-conversation tests on llama-swap (DEC-004-13, DoD-15..17).
 
 A two-round tool conversation on the Responses class with the thinking model and thinking on, streamed
 and not; protocol parity of a tool conversation on both protocols through the factory; and a JSON-object
@@ -112,7 +112,7 @@ async def _tool_chat(
 
 
 def _assert_reasoning_blocks_well_formed(text: str) -> None:
-    """Well-formed reasoning blocks (003 context.md § Test conventions): opening and closing markers balanced
+    """Well-formed reasoning blocks (DEC-005-6): opening and closing markers balanced
     and never nested, every block closed, and the first block before any answer text."""
     markers = _MARKER.findall(text)
     depth = 0

@@ -1,4 +1,4 @@
-"""Live tool-conversation tests for OpenAI (plan 004.responses-tools, step 002, DoD-14..16).
+"""Live tool-conversation tests for OpenAI (DEC-004-13, DoD-14..16).
 
 A two-round tool conversation on the Responses protocol with the OpenAI reasoning model, streamed and not; the
 same tool conversation on both protocols through the factory; and a tool conversation with a JSON-object answer
@@ -130,7 +130,7 @@ def _assert_no_markers(text: str) -> None:
 
 
 def _assert_reasoning_blocks_well_formed(received: str, answer: str) -> None:
-    """The receiver's reasoning blocks are well-formed (003 context.md § Test conventions): opening and closing
+    """The receiver's reasoning blocks are well-formed (DEC-005-6): opening and closing
     markers balanced and alternating, every block closed, and the first block before the answer text.
 
     No block at all is accepted: OpenAI's reasoning summary is not reliably produced at low effort, so its
