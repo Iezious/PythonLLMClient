@@ -19,7 +19,7 @@ The package: base client with shared HTTP/SSE/option-merge plumbing, backend cli
 - `ollama.py` — `OllamaAPIClient`, deprecated, observation-only.
 - `tools.py` — `pydantic_to_openai_tool` helper that builds a tool definition from a pydantic model.
 - `trace.py` — `LLMTracer`, env-driven trace logging of LLM calls; a record that cannot be set up or written never changes the call's outcome, and record names never collide.
-- `llm.py` — `get_llm_client` factory (server kind plus `protocol`: omitted / `"responses"` / `"chat_completions"`, refused on Ollama; forwards the app's credential), placeholder-template helpers (repeated filling stops after a pass that changes nothing), retired CLI smoke test.
+- `llm.py` — `get_llm_client` factory (server kind plus `protocol`: omitted / `"responses"` / `"chat_completions"`, refused on Ollama; forwards the app's credential), placeholder-template helpers (repeated filling stops after a pass that changes nothing).
 - `py.typed` — PEP 561 typing marker.
 
 See also: `docs/architecture/subsystems.md`, `docs/architecture/interfaces.md`, `docs/architecture/data-model.md`; decisions by file (`docs/decisions/000.legacy.md` for DEC-000, `docs/decisions/001.core-fixes.md` for DEC-001, `docs/decisions/002.edge-fixes.md` for DEC-002, `docs/decisions/003.responses-chat.md` for DEC-003, `docs/decisions/004.responses-tools.md` for DEC-004, `docs/decisions/arch-responses-protocol.md` for DEC-arch):

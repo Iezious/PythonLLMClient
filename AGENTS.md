@@ -20,7 +20,7 @@ llm/                  # Main package (all source lives here)
   llama_swap_chat_completions.py # LlamaSwapChatCompletionsClient (chat completions)
   tools.py            # pydantic_to_openai_tool helper
   trace.py            # LLMTracer — env-driven trace logging for LLM interactions
-  llm.py              # Factory function + placeholder utilities + retired CLI smoke test
+  llm.py              # Factory function + placeholder utilities
   py.typed            # PEP 561 typing marker
 tests/                # Test directory (pytest + pytest-asyncio)
   integrations/       # Live tests against real servers (in the default run)

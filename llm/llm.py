@@ -1,11 +1,10 @@
-"""Client factory, prompt placeholder helpers and the retired CLI smoke test.
+"""Client factory and prompt placeholder helpers.
 
 Builds the right backend client from a server kind and wire protocol (``get_llm_client``) and fills prompt templates.
 """
 # ---------------------------------------------------------------------------
 # Client Factory
 # ---------------------------------------------------------------------------
-import argparse
 from typing import Optional, Dict, Any
 
 from llm.llm_client import LLMClient
@@ -153,25 +152,3 @@ def recursive_format_placeholders(text: str, data: Dict[str, str | bytes | int |
             break
         out = filled
     return out
-
-
-# ---------------------------------------------------------------------------
-# CLI helper
-# ---------------------------------------------------------------------------
-
-def _cli() -> None:  # pragma: no cover
-    p = argparse.ArgumentParser(description="Quick Ollama smoke test")
-    p.add_argument("--model", required=True)
-    p.add_argument("--prompt", required=True)
-    p.add_argument("--temperature", type=float)
-    p.add_argument("--top-p", type=float, dest="top_p")
-    p.add_argument("--top-k", type=int, dest="top_k")
-    p.add_argument("--max-tokens", type=int, dest="max_tokens")
-    args = p.parse_args()
-
-    kw = {k: v for k, v in vars(args).items() if v is not None}
-    client = OllamaAPIClient(args.model) # Default to Ollama for this CLI
-    print(client.generate(args.prompt, **kw))
-
-if __name__ == "__main__":
-    _cli()

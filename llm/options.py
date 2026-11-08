@@ -2,7 +2,7 @@
 
 Gives callers and backends one typed vocabulary for sampling/generation options per backend.
 """
-from typing import Any, Optional, Dict, List, Union
+from typing import Any, Optional, Dict, Union
 from typing_extensions import TypedDict
 
 class BaseLLMOptions(TypedDict, total=False):
