@@ -5,10 +5,11 @@ Builds the right backend client from a server kind and wire protocol (``get_llm_
 # ---------------------------------------------------------------------------
 # Client Factory
 # ---------------------------------------------------------------------------
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, cast
 
 from llm.llm_client import LLMClient
 from llm.ollama import OllamaAPIClient
+from llm.options import OllamaOptions, OpenAIOptions
 from llm.openai import OpenAIAPIClient
 from llm.llama_swap import LlamaSwapAPIClient
 from llm.openai_chat_completions import OpenAIChatCompletionsClient
@@ -26,7 +27,10 @@ def get_llm_client(
     bearer_token: Optional[str] = None,
     default_options: Optional[Dict[str, Any]] = None,
     protocol: str | None = None,
-) -> LLMClient:
+    *,
+    read_timeout: float | None = None,
+    trace: bool | None = None,
+) -> LLMClient[Any]:
     """Build the client for ``server_type`` and ``protocol``, forwarding every other argument to its constructor.
 
     Refusals are checked in this order (DEC-003-8, DEC-arch-4): an unknown ``server_type``; then a
@@ -46,6 +50,12 @@ def get_llm_client(
             ``"responses"`` builds ``OpenAIAPIClient`` / ``LlamaSwapAPIClient``; ``"chat_completions"``
             builds ``OpenAIChatCompletionsClient`` / ``LlamaSwapChatCompletionsClient``. Must be ``None``
             for ``"ollama"``.
+        read_timeout: Silence limit in seconds for streamed requests, or ``None`` (not passed) for none.
+            Forwarded by keyword to the chosen OpenAI-family class; refused for ``"ollama"``
+            (DEC-arch-24, DEC-006-5).
+        trace: Per-client trace switch (``None`` = environment decides, ``False`` = off, ``True`` = on into
+            ``LLM_TRACE_FOLDER``), forwarded by keyword to whichever class is chosen, Ollama included
+            (DEC-arch-27, DEC-006-5).
 
     Returns:
         The constructed client; no network call is made.
@@ -53,7 +63,10 @@ def get_llm_client(
     Raises:
         ValueError: ``server_type`` is not a supported kind (the message names it); a protocol is
             given for ``"ollama"`` (the message says a protocol choice is not offered on Ollama); or
-            ``protocol`` is not an accepted value (the message names the value and the accepted values).
+            ``protocol`` is not an accepted value (the message names the value and the accepted values);
+            or ``read_timeout`` is given (not ``None``) with ``"ollama"`` (the message names ``read_timeout``
+            and the reason).
+            The chosen constructor raises ``ValueError`` for ``trace=True`` without ``LLM_TRACE_FOLDER``.
             The OpenAI constructors also raise ``ValueError`` without a credential, whichever protocol.
     """
     # Refusal order is fixed by DEC-003-8: server kind first, then the Ollama protocol refusal, then
@@ -64,7 +77,19 @@ def get_llm_client(
         # Any protocol value, even a valid one, is refused: Ollama offers no protocol choice.
         if protocol is not None:
             raise ValueError(f"A protocol choice is not offered on Ollama (got protocol={protocol!r})")
-        return OllamaAPIClient(model, base_url, timeout, bearer_token, default_options)
+        # DEC-arch-24: refused here, before construction -- OllamaAPIClient does not declare read_timeout,
+        # and a silence limit has no effect on a client without streaming.
+        if read_timeout is not None:
+            raise ValueError(
+                f"read_timeout is not offered on Ollama (got read_timeout={read_timeout!r}): "
+                "the Ollama client does not stream, so a silence limit has no effect"
+            )
+        # The factory takes a plain dict (its signature is unchanged); the cast only types it as the class's
+        # settings shape for the strict checker (Step 002) -- the value is passed through untouched.
+        # Unlike read_timeout, the trace switch is offered on Ollama too and forwarded by keyword (DEC-006-13).
+        return OllamaAPIClient(
+            model, base_url, timeout, bearer_token, cast(Optional[OllamaOptions], default_options), trace=trace
+        )
     # None (not passed) selects the Responses classes, the default protocol (DEC-arch-4).
     if protocol is None or protocol == "responses":
         classes = {"openai": OpenAIAPIClient, "llamaswap": LlamaSwapAPIClient}
@@ -77,7 +102,13 @@ def get_llm_client(
     # The app owns the credential; the factory forwards it to whichever class is chosen and the
     # library never reads it from the environment (DEC-001-5). The OpenAI constructors refuse a
     # missing credential themselves.
-    return classes[server_type](model, base_url, timeout, bearer_token, default_options)
+    # As above, the cast only types the plain dict as the OpenAI settings shape (Step 002); no conversion.
+    # read_timeout and trace are forwarded by keyword (keyword-only on every constructor, DEC-006-5).
+    return classes[server_type](
+        model, base_url, timeout, bearer_token, cast(Optional[OpenAIOptions], default_options),
+        read_timeout=read_timeout,
+        trace=trace,
+    )
 
 
 def substitute_placeholders(template: str, placeholders: Dict[str, str]) -> str:

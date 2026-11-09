@@ -15,16 +15,19 @@
   - A2 No usage scope: calls work; the connection is opened on first call (its release is the FEAT-001 gap).
   - A3 OpenAI: the app provides the credential when building the client.
   - A4 llama-swap with or without a credential; a given credential reaches the server on every request.
+  - A5 The app sets a silence limit for streamed replies (US-068).
 - **Exception flows:**
   - E1 Unknown backend kind: refused at creation; the error names the kind.
   - E2 OpenAI with no credential provided: refused when the client is built; the message tells the developer to provide one and shows no credential.
   - E3 Wrong address, unreachable server or unknown model: not detected at creation; surfaces as an error on the first call.
+  - E4 A stream stays silent longer than the silence limit: the call ends with the library's time-limit error.
 - **Postconditions:** the client is bound to one backend, address and model; its connection is released when the usage scope closes.
 - **Source:**
   - One model per client, exact names (E1): `[confirmed: user]` interview "I-01 — FEAT-001 Connect to a chosen backend" (2026-11-07)
   - A3, E2 (credential from the app): `[confirmed: user]` interview "I-01 — wave-1 checkpoint (CORRECTION)" (2026-11-07)
   - A4 (llama-swap optional credential): `[confirmed: user]` interview "I-01 — wave-1 checkpoint (CORRECTION)" (2026-11-07)
   - Evidence only (no contact at creation, reuse, E1 error names the kind, E3): behaviour per deep-docs notes I-01, I-27
+  - A5, E4 (silence limit): `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
 
 ### UC-002 — Chat with a model
 - **Feature:** FEAT-002 · **Actors:** ACT-001, ACT-002
@@ -168,16 +171,23 @@
   - A5 A requested answer format (any JSON, or a given shape) applies to every round; the answer comes back in that shape.
   - A6 Streamed: see UC-005 A3 and UC-006 A3.
   - A7 Deprecated Ollama: a requested shape becomes "any JSON" (observed).
+  - A8 Tolerant handling (default): each tool-call failure is told to the model in a short description and the conversation continues; other calls in the round still run (US-064).
+  - A9 An observer is told each tool call's start and its result or failure, in call order (US-065).
+  - A10 A tool function accepting any argument names runs with the model's arguments (US-066).
 - **Exception flows:**
   - E1 An offered tool has no function: refused before the server is contacted.
-  - E2 A tool fails, or the model passes an argument the tool lacks: the call ends with an error naming the tool; tools already run keep their effects; the model is not told.
+  - E2 Under strict handling (chosen by the app): a tool fails, or the model passes an argument the tool lacks: the call ends with an error naming the tool; tools already run keep their effects; the model is not told.
   - E3 The round limit is reached: error naming the round limit as the reason, no partial answer; the last round's tools ran.
-  - E4 The model requests an unoffered tool, its argument text cannot be read, or a tool result cannot be made into text: the call ends with the library's error (OpenAI and llama-swap).
+  - E4 Under strict handling (chosen by the app): the model requests an unoffered tool, its argument text cannot be read, or a tool result cannot be made into text: the call ends with the library's error (OpenAI and llama-swap).
   - E5 Streamed tool requests arrive without position numbers or with repeated names: each runs as its own call with its own name and arguments.
+  - E6 The observer fails: strict — the call ends with that failure; tolerant — the model is told the tool failed, the conversation continues, a warning is raised.
+  - E7 An explicit handling choice or an observer asked for on the deprecated Ollama: refused, naming the reason.
 - **Postconditions:** the developer holds the final answer, or the call ended with an error.
 - **Source:**
   - E2 (the call ends, the model is not told), E3 (error reason), E4, E5, A5 (format on every round): `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
   - A5 (answer format on a tool conversation is wanted): `[confirmed: user]` interview "deep-docs scope round" (2026-11-07)
+  - A8–A10, E6, E7, and the strict-handling scope of E2/E4: `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" and "challenges — 0.2.1 asks" (2026-11-08)
+  - A8, E2, E4 (tolerant is the default, strict chosen by the app): `[confirmed: user]` interview "Delta — tolerant handling becomes the default" (2026-11-09), C10
   - Evidence only (main flow, A1–A4, A6, A7, E1, E3 behaviour, E2 naming the tool, E2 tools already run keep their effects): behaviour per deep-docs notes I-07, I-29-I-30
 
 ### UC-008 — Get a JSON-only answer
@@ -259,14 +269,17 @@
   - A1 Tracing off, or only one of the two settings given: no record, and the call behaves the same.
   - A2 Settings changed after the client exists: no effect on that client.
   - A3 The app writes its own records through the library's trace facility (supported).
+  - A4 The app forces tracing on or off for a client (US-069).
 - **Exception flows:**
   - E1 The call fails: the record ends with the error, and the same error reaches the app.
   - E2 The folder cannot be written: the call goes ahead untraced.
   - E3 Calls start at the same instant: each has its own record.
   - E4 Writing the record fails while an error is being recorded: the app receives the call's own error.
+  - E5 Forced on with no trace folder: building the client is refused, naming the reason.
 - **Postconditions:** each traced call has one record; the call's outcome is as without tracing.
 - **Source:**
   - A3, E2, E3, E4: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
+  - A4, E5: `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
   - Evidence only (main flow, A1, A2, E1): behaviour per deep-docs notes I-11-I-32
 
 ### UC-012 — Fill a prompt template

@@ -3,7 +3,9 @@
 Covers: a record that cannot be set up leaves the call untraced (DEC-002-11); a record-write failure never
 replaces the call's result or error and never leaks the file (DEC-002-12); exclusive record creation with a
 counter suffix on name collisions (DEC-002-13); the system instruction shown once among the conversation
-sections (DEC-002-14); the record layout and the on/off switch (US-048). Uses the DEC-002-16 seams: the
+sections (DEC-002-14); the record layout and the on/off switch (US-048); and, for feature 006 step 004, the
+session's ``log_tool_error`` entry writing a ``TOOL ERROR: <name>`` section (DEC-006-7, tests suffixed
+``__s004_DoD7``; the per-client switch is in ``test_llm_trace_switch.py``). Uses the DEC-002-16 seams: the
 module-level ``llm.trace.datetime`` clock and the ``open`` looked up through ``llm.trace``. Every expected
 value comes from the step's Definition of done, the cited decisions and the trace-record data model.
 """
@@ -229,8 +231,10 @@ def _only_record(root: Path) -> str:
 
 
 def _heading(line: str) -> str | None:
+    """Return the section title a line opens, or ``None``; tool sections are ``TOOL CALL|RESULT|ERROR: <name>``
+    lines (``TOOL ERROR`` added by DEC-006-7)."""
     stripped = line.strip()
-    if stripped in _HEADINGS or stripped.startswith(("TOOL CALL:", "TOOL RESULT:")):
+    if stripped in _HEADINGS or stripped.startswith(("TOOL CALL:", "TOOL RESULT:", "TOOL ERROR:")):
         return stripped
     return None
 
@@ -940,3 +944,123 @@ def test_tracer_direct_use_with_own_operation_label__DoD14(monkeypatch, tmp_path
     assert _history(text) == [f"[user] {USER_TEXT}"]
     assert _bodies(text, "RESPONSE") == [[REPLY_TEXT]]
     assert _titles(text)[-1] == "END TRACE"
+
+
+# ---------------------------------------------------------------------------
+# Feature 006 step 004 DoD-7 — the session's tool-error entry (DEC-006-7, DEC-002-12)
+# ---------------------------------------------------------------------------
+
+# Notes as the tool loops will write them (DEC-006-7): a failure kind name, or an observer-failure note.
+_KIND_NOTE = "tool_raised"
+_OBSERVER_NOTE = "observer failed: RuntimeError: observer exploded 4411"
+
+
+@pytest.mark.parametrize("note", [_KIND_NOTE, _OBSERVER_NOTE])
+def test_tracer_session_log_tool_error_writes_tool_error_section__s004_DoD7(monkeypatch, tmp_path, note):
+    """Step 004 DoD-7 (US-065.AC-13): on an enabled session ``log_tool_error(name, note)`` writes a
+    ``TOOL ERROR: <name>`` section carrying the note, inside the record (in emission order, before END TRACE)."""
+    _enable_tracing(monkeypatch, tmp_path)
+    tracer = LLMTracer()
+    assert tracer.enabled is True
+
+    with tracer.trace("chat_with_tools", MODEL) as t:
+        t.log_tool_call("fetch_record", {"key": "k1"})
+        t.log_tool_result("fetch_record", "Tool 'fetch_record' failed.")
+        t.log_tool_error("fetch_record", note)
+        t.log_response(REPLY_TEXT)
+
+    text = _only_record(tmp_path)
+    titles = _titles(text)
+    assert titles.count("TOOL ERROR: fetch_record") == 1, titles
+    at = titles.index("TOOL ERROR: fetch_record")
+    # Emission order (data-model.md § Trace record): result, then the note, then the response and the footer.
+    assert titles[at - 1] == "TOOL RESULT: fetch_record", titles
+    assert titles[at + 1] == "RESPONSE", titles
+    assert titles[-1] == "END TRACE"
+    bodies = _bodies(text, "TOOL ERROR: fetch_record")
+    assert any(note in line for line in bodies[0]), bodies
+
+
+def test_tracer_session_log_tool_error_names_each_tool__s004_DoD7(monkeypatch, tmp_path):
+    """Step 004 DoD-7: each ``log_tool_error`` call gets its own ``TOOL ERROR: <name>`` section with its own note."""
+    _enable_tracing(monkeypatch, tmp_path)
+    tracer = LLMTracer()
+
+    with tracer.trace("chat_with_tools", MODEL) as t:
+        t.log_tool_error("fetch_record", "not_offered")
+        t.log_tool_error("count_items", "bad_arguments")
+
+    text = _only_record(tmp_path)
+    assert [title for title in _titles(text) if title.startswith("TOOL ERROR:")] == [
+        "TOOL ERROR: fetch_record",
+        "TOOL ERROR: count_items",
+    ]
+    assert any("not_offered" in line for line in _bodies(text, "TOOL ERROR: fetch_record")[0])
+    assert any("bad_arguments" in line for line in _bodies(text, "TOOL ERROR: count_items")[0])
+
+
+@pytest.mark.parametrize(("flag", "folder_mode"), [(None, "set"), ("0", "set"), ("1", "unset")])
+def test_tracer_disabled_session_log_tool_error_writes_nothing__s004_DoD7(monkeypatch, tmp_path, flag, folder_mode):
+    """Step 004 DoD-7: on a disabled session ``log_tool_error`` writes nothing and does not raise."""
+    # Run from tmp_path so a record written relative to the working directory would also be found.
+    monkeypatch.chdir(tmp_path)
+    if flag is None:
+        monkeypatch.delenv("LLM_TRACE", raising=False)
+    else:
+        monkeypatch.setenv("LLM_TRACE", flag)
+    if folder_mode == "set":
+        monkeypatch.setenv("LLM_TRACE_FOLDER", str(tmp_path / "traces"))
+    else:
+        monkeypatch.delenv("LLM_TRACE_FOLDER", raising=False)
+    tracer = LLMTracer()
+    assert tracer.enabled is False
+    body_ran = False
+
+    with tracer.trace("chat_with_tools", MODEL) as t:
+        t.log_tool_error("fetch_record", _KIND_NOTE)
+        body_ran = True
+
+    assert body_ran
+    assert _records(tmp_path) == []
+
+
+def test_tracer_session_log_tool_error_write_failure_never_raises__s004_DoD7(monkeypatch, tmp_path):
+    """Step 004 DoD-7 / DEC-002-12: a write failing during ``log_tool_error`` does not raise out of the session;
+    the session writes nothing more and the file is closed."""
+    _enable_tracing(monkeypatch, tmp_path)
+    opened = _install_flaky_open(monkeypatch)
+    tracer = LLMTracer()
+    after_entry = False
+
+    with tracer.trace("chat_with_tools", MODEL) as t:
+        t.log_tool_call("fetch_record", {"key": "k1"})
+        # Break the record exactly as the tool-error entry is written.
+        opened[0].fail_now = True
+        t.log_tool_error("fetch_record", _KIND_NOTE)
+        after_entry = True
+        t.log_response(REPLY_TEXT)
+
+    assert after_entry
+    assert len(opened) == 1
+    assert opened[0].broken, "the write failure was not exercised by log_tool_error"
+    assert opened[0].writes_after_failure == 0
+    assert opened[0].closed
+    assert REPLY_TEXT not in _only_record(tmp_path)
+
+
+def test_tracer_broken_session_log_tool_error_attempts_no_write__s004_DoD7(monkeypatch, tmp_path):
+    """Step 004 DoD-7 / DEC-002-12: once an earlier write failed, ``log_tool_error`` attempts no write and raises
+    nothing."""
+    _enable_tracing(monkeypatch, tmp_path)
+    opened = _install_flaky_open(monkeypatch, fail_on="REQUEST")
+    tracer = LLMTracer()
+
+    with tracer.trace("chat_with_tools", MODEL) as t:
+        t.log_request("POST", "/chat/completions", {"model": MODEL})
+        t.log_tool_error("fetch_record", _KIND_NOTE)
+
+    assert len(opened) == 1
+    assert opened[0].broken
+    assert opened[0].writes_after_failure == 0
+    assert opened[0].closed
+    assert "TOOL ERROR" not in _only_record(tmp_path)

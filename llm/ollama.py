@@ -85,7 +85,7 @@ _OLLAMA_ALIAS_MAP = {
 # Ollama Client
 # ---------------------------------------------------------------------------
 
-class OllamaAPIClient(LLMClient):
+class OllamaAPIClient(LLMClient[OllamaOptions]):
     """Small convenience layer over Ollama's HTTP API.
 
     This client is designed for interacting with Ollama servers.
@@ -97,8 +97,13 @@ class OllamaAPIClient(LLMClient):
 
     def __init__(self, model: str, base_url: str = "http://localhost:11434",
                  timeout: float = 600.0, bearer_token: Optional[str] = None,
-                 default_options: Optional[OllamaOptions] = None) -> None:
-        super().__init__(model, base_url, timeout, bearer_token, default_options)
+                 default_options: Optional[OllamaOptions] = None, *, trace: bool | None = None) -> None:
+        """Build the deprecated Ollama client; ``trace`` is only passed to the base (DEC-arch-24, DEC-006-13).
+
+        Raises:
+            ValueError: ``trace=True`` while ``LLM_TRACE_FOLDER`` is unset or empty (raised by the base).
+        """
+        super().__init__(model, base_url, timeout, bearer_token, default_options, trace=trace)
 
     # option merge / validate
     def _merge_options(

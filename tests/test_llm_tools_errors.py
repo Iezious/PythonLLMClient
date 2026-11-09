@@ -3,6 +3,11 @@
 Covers DEC-002-2..5 (with the unchanged rules reproduced in DEC-004-11): unoffered or
 unnamed tools, unreadable arguments, unserialisable results and the round-limit error, plus the failure kinds
 that must stay unchanged. Every scenario runs on both clients, streamed and non-streamed.
+
+Since feature 006 the tool loop is tolerant by default (DEC-arch-28): a test that expects a tool-call failure
+to raise opts into strict handling with ``tool_errors="raise"``. The raising helpers take that keyword per
+call; the ``OpenAIChatCompletionsClient`` cases pass it (feature 006 step 008, DoD-10) and so do the
+``LlamaSwapChatCompletionsClient`` cases (feature 006 step 009, DoD-10).
 """
 
 import json
@@ -118,6 +123,15 @@ def _last_tool_message(payload: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
+def _mode(tool_errors: str | None) -> dict[str, Any]:
+    """Return the ``chat_with_tools`` keyword selecting the tool-failure handling; ``None`` passes nothing.
+
+    Passing nothing keeps the class default, so a class not yet migrated to explicit strict handling is called
+    exactly as before (feature 006: step 008 migrates the OpenAI cases, step 009 the llama-swap cases).
+    """
+    return {} if tool_errors is None else {"tool_errors": tool_errors}
+
+
 def _recording_add(calls: list[dict[str, Any]]) -> Callable[..., int]:
     """Return an ``add(a, b)`` tool that records every invocation's keyword arguments."""
 
@@ -133,8 +147,11 @@ def _recording_add(calls: list[dict[str, Any]]) -> Callable[..., int]:
 # ---------------------------------------------------------------------------
 
 
-async def _check_unoffered_tool(monkeypatch, client: Any, stream: bool) -> None:
-    """DoD-1: a requested name not in ``tools_definitions`` raises LLMError naming it; its callable never runs."""
+async def _check_unoffered_tool(monkeypatch, client: Any, stream: bool, *, tool_errors: str | None = None) -> None:
+    """DoD-1: a requested name not in ``tools_definitions`` raises LLMError naming it; its callable never runs.
+
+    ``tool_errors`` is forwarded to ``chat_with_tools`` when given (strict opt-in, DEC-arch-28).
+    """
     add_calls: list[dict[str, Any]] = []
     secret_calls: list[dict[str, Any]] = []
 
@@ -152,6 +169,7 @@ async def _check_unoffered_tool(monkeypatch, client: Any, stream: bool) -> None:
             # The callable exists in ``tools`` but is not advertised: it must still be refused (DEC-002-3).
             tools={"add": _recording_add(add_calls), "secret_tool": secret_tool},
             stream=stream,
+            **_mode(tool_errors),
         )
     assert "secret_tool" in str(exc_info.value)
     assert secret_calls == []
@@ -165,8 +183,13 @@ _UNNAMED_CALLS = [
 ]
 
 
-async def _check_unnamed_tool(monkeypatch, client: Any, stream: bool, call: dict[str, Any]) -> None:
-    """DoD-2: a requested call with an empty or missing name raises LLMError and no tool runs."""
+async def _check_unnamed_tool(
+    monkeypatch, client: Any, stream: bool, call: dict[str, Any], *, tool_errors: str | None = None
+) -> None:
+    """DoD-2: a requested call with an empty or missing name raises LLMError and no tool runs.
+
+    ``tool_errors`` is forwarded to ``chat_with_tools`` when given (strict opt-in, DEC-arch-28).
+    """
     add_calls: list[dict[str, Any]] = []
     _install_rounds(monkeypatch, client, stream=stream, rounds=[("", [call]), ("Done.", [])])
     with pytest.raises(LLMError):
@@ -175,12 +198,18 @@ async def _check_unnamed_tool(monkeypatch, client: Any, stream: bool, call: dict
             tools_definitions=[_tool_def("add")],
             tools={"add": _recording_add(add_calls)},
             stream=stream,
+            **_mode(tool_errors),
         )
     assert add_calls == []
 
 
-async def _check_unreadable_arguments(monkeypatch, client: Any, stream: bool, arguments: str) -> None:
-    """DoD-3/4: argument text that is not a JSON object raises LLMError naming the tool; the tool never runs."""
+async def _check_unreadable_arguments(
+    monkeypatch, client: Any, stream: bool, arguments: str, *, tool_errors: str | None = None
+) -> None:
+    """DoD-3/4: argument text that is not a JSON object raises LLMError naming the tool; the tool never runs.
+
+    ``tool_errors`` is forwarded to ``chat_with_tools`` when given (strict opt-in, DEC-arch-28).
+    """
     calls: list[dict[str, Any]] = []
     _install_rounds(
         monkeypatch, client, stream=stream, rounds=[("", [_call("add_numbers", arguments)]), ("Done.", [])]
@@ -191,6 +220,7 @@ async def _check_unreadable_arguments(monkeypatch, client: Any, stream: bool, ar
             tools_definitions=[_tool_def("add_numbers")],
             tools={"add_numbers": _recording_add(calls)},
             stream=stream,
+            **_mode(tool_errors),
         )
     assert "add_numbers" in str(exc_info.value)
     assert calls == []
@@ -244,8 +274,13 @@ _UNSERIALISABLE_RESULTS = [
 ]
 
 
-async def _check_unserialisable_result(monkeypatch, client: Any, stream: bool, make: Callable[[], Any]) -> None:
-    """DoD-6: a mapping/list result that cannot become JSON raises LLMError naming the tool."""
+async def _check_unserialisable_result(
+    monkeypatch, client: Any, stream: bool, make: Callable[[], Any], *, tool_errors: str | None = None
+) -> None:
+    """DoD-6: a mapping/list result that cannot become JSON raises LLMError naming the tool.
+
+    ``tool_errors`` is forwarded to ``chat_with_tools`` when given (strict opt-in, DEC-arch-28).
+    """
 
     def report_tool() -> Any:
         return make()
@@ -257,6 +292,7 @@ async def _check_unserialisable_result(monkeypatch, client: Any, stream: bool, m
             tools_definitions=[_tool_def("report_tool")],
             tools={"report_tool": report_tool},
             stream=stream,
+            **_mode(tool_errors),
         )
     assert "report_tool" in str(exc_info.value)
 
@@ -357,8 +393,11 @@ async def _check_round_limit_count(monkeypatch, client: Any, stream: bool) -> No
     assert len(sent) == 2
 
 
-async def _check_tool_raises(monkeypatch, client: Any, stream: bool) -> None:
-    """DoD-10: a tool that raises ends the call with RuntimeError naming the tool."""
+async def _check_tool_raises(monkeypatch, client: Any, stream: bool, *, tool_errors: str | None = None) -> None:
+    """DoD-10: a tool that raises ends the call with RuntimeError naming the tool.
+
+    ``tool_errors`` is forwarded to ``chat_with_tools`` when given (strict opt-in, DEC-arch-28).
+    """
 
     def failing_tool() -> str:
         raise ZeroDivisionError("boom")
@@ -370,12 +409,18 @@ async def _check_tool_raises(monkeypatch, client: Any, stream: bool) -> None:
             tools_definitions=[_tool_def("failing_tool")],
             tools={"failing_tool": failing_tool},
             stream=stream,
+            **_mode(tool_errors),
         )
     assert "failing_tool" in str(exc_info.value)
 
 
-async def _check_bad_argument_name(monkeypatch, client: Any, stream: bool) -> None:
-    """DoD-10: an argument name the callable lacks ends with ValueError and the tool does not run."""
+async def _check_bad_argument_name(
+    monkeypatch, client: Any, stream: bool, *, tool_errors: str | None = None
+) -> None:
+    """DoD-10: an argument name the callable lacks ends with ValueError and the tool does not run.
+
+    ``tool_errors`` is forwarded to ``chat_with_tools`` when given (strict opt-in, DEC-arch-28).
+    """
     add_calls: list[dict[str, Any]] = []
     _install_rounds(
         monkeypatch, client, stream=stream, rounds=[("", [_call("add", '{"zzz": 1}')]), ("Done.", [])]
@@ -386,6 +431,7 @@ async def _check_bad_argument_name(monkeypatch, client: Any, stream: bool) -> No
             tools_definitions=[_tool_def("add")],
             tools={"add": _recording_add(add_calls)},
             stream=stream,
+            **_mode(tool_errors),
         )
     assert add_calls == []
 
@@ -411,32 +457,32 @@ async def _check_missing_callable(monkeypatch, client: Any, stream: bool) -> Non
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_openai_unoffered_tool_raises_llmerror__DoD1(monkeypatch, stream):
-    """An unadvertised tool name ends with LLMError naming it; its callable is not run (DoD-1)."""
-    await _check_unoffered_tool(monkeypatch, _openai(), stream)
+    """Strict: an unadvertised tool name ends with LLMError naming it; not run (DoD-1; 006/008 DoD-10)."""
+    await _check_unoffered_tool(monkeypatch, _openai(), stream, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", _UNNAMED_CALLS)
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_openai_unnamed_tool_raises_llmerror__DoD2(monkeypatch, stream, call):
-    """An empty or missing tool name ends with LLMError and no tool runs (DoD-2)."""
-    await _check_unnamed_tool(monkeypatch, _openai(), stream, call)
+    """Strict: an empty or missing tool name ends with LLMError and no tool runs (DoD-2; 006/008 DoD-10)."""
+    await _check_unnamed_tool(monkeypatch, _openai(), stream, call, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["{not json", '{"a": 1,'])
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_openai_invalid_json_arguments_raise_llmerror__DoD3(monkeypatch, stream, arguments):
-    """Argument text that is not valid JSON ends with LLMError naming the tool; it does not run (DoD-3)."""
-    await _check_unreadable_arguments(monkeypatch, _openai(), stream, arguments)
+    """Strict: argument text that is not valid JSON ends with LLMError naming the tool (DoD-3; 006/008 DoD-10)."""
+    await _check_unreadable_arguments(monkeypatch, _openai(), stream, arguments, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["[1, 2]", "42", '"text"', "null"])
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_openai_non_object_json_arguments_raise_llmerror__DoD4(monkeypatch, stream, arguments):
-    """Argument text decoding to a list, number, string or null ends with LLMError naming the tool (DoD-4)."""
-    await _check_unreadable_arguments(monkeypatch, _openai(), stream, arguments)
+    """Strict: argument text decoding to a non-object ends with LLMError naming the tool (DoD-4; 006/008 DoD-10)."""
+    await _check_unreadable_arguments(monkeypatch, _openai(), stream, arguments, tool_errors="raise")
 
 
 @pytest.mark.asyncio
@@ -451,8 +497,8 @@ async def test_openai_tool_runs_with_model_arguments__DoD5(monkeypatch, stream, 
 @pytest.mark.parametrize("make", _UNSERIALISABLE_RESULTS)
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_openai_unserialisable_result_raises_llmerror__DoD6(monkeypatch, stream, make):
-    """An unserialisable mapping/list result ends with LLMError naming the tool (DoD-6)."""
-    await _check_unserialisable_result(monkeypatch, _openai(), stream, make)
+    """Strict: an unserialisable mapping/list result ends with LLMError naming the tool (DoD-6; 006/008 DoD-10)."""
+    await _check_unserialisable_result(monkeypatch, _openai(), stream, make, tool_errors="raise")
 
 
 @pytest.mark.asyncio
@@ -487,15 +533,15 @@ async def test_openai_round_limit_of_two_sends_two_requests__DoD9(monkeypatch, s
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_openai_raising_tool_still_runtimeerror__DoD10(monkeypatch, stream):
-    """A tool that raises still ends with RuntimeError naming the tool (DoD-10)."""
-    await _check_tool_raises(monkeypatch, _openai(), stream)
+    """Strict: a tool that raises still ends with RuntimeError naming the tool (DoD-10; 006/008 DoD-10)."""
+    await _check_tool_raises(monkeypatch, _openai(), stream, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_openai_bad_argument_name_still_valueerror__DoD10(monkeypatch, stream):
-    """An argument name the callable lacks still ends with ValueError; the tool does not run (DoD-10)."""
-    await _check_bad_argument_name(monkeypatch, _openai(), stream)
+    """Strict: an undeclared argument name still ends with ValueError; tool not run (DoD-10; 006/008 DoD-10)."""
+    await _check_bad_argument_name(monkeypatch, _openai(), stream, tool_errors="raise")
 
 
 @pytest.mark.asyncio
@@ -513,32 +559,32 @@ async def test_openai_missing_callable_still_valueerror_before_request__DoD10(mo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_llamaswap_unoffered_tool_raises_llmerror__DoD1(monkeypatch, stream):
-    """An unadvertised tool name ends with LLMError naming it; its callable is not run (DoD-1)."""
-    await _check_unoffered_tool(monkeypatch, _llamaswap(), stream)
+    """Strict: an unadvertised tool name ends with LLMError naming it; not run (DoD-1; 006/009 DoD-10)."""
+    await _check_unoffered_tool(monkeypatch, _llamaswap(), stream, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", _UNNAMED_CALLS)
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_llamaswap_unnamed_tool_raises_llmerror__DoD2(monkeypatch, stream, call):
-    """An empty or missing tool name ends with LLMError and no tool runs (DoD-2)."""
-    await _check_unnamed_tool(monkeypatch, _llamaswap(), stream, call)
+    """Strict: an empty or missing tool name ends with LLMError and no tool runs (DoD-2; 006/009 DoD-10)."""
+    await _check_unnamed_tool(monkeypatch, _llamaswap(), stream, call, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["{not json", '{"a": 1,'])
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_llamaswap_invalid_json_arguments_raise_llmerror__DoD3(monkeypatch, stream, arguments):
-    """Argument text that is not valid JSON ends with LLMError naming the tool; it does not run (DoD-3)."""
-    await _check_unreadable_arguments(monkeypatch, _llamaswap(), stream, arguments)
+    """Strict: argument text that is not valid JSON ends with LLMError naming the tool (DoD-3; 006/009 DoD-10)."""
+    await _check_unreadable_arguments(monkeypatch, _llamaswap(), stream, arguments, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["[1, 2]", "42", '"text"', "null"])
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_llamaswap_non_object_json_arguments_raise_llmerror__DoD4(monkeypatch, stream, arguments):
-    """Argument text decoding to a list, number, string or null ends with LLMError naming the tool (DoD-4)."""
-    await _check_unreadable_arguments(monkeypatch, _llamaswap(), stream, arguments)
+    """Strict: argument text decoding to a non-object ends with LLMError naming the tool (DoD-4; 006/009 DoD-10)."""
+    await _check_unreadable_arguments(monkeypatch, _llamaswap(), stream, arguments, tool_errors="raise")
 
 
 @pytest.mark.asyncio
@@ -553,8 +599,8 @@ async def test_llamaswap_tool_runs_with_model_arguments__DoD5(monkeypatch, strea
 @pytest.mark.parametrize("make", _UNSERIALISABLE_RESULTS)
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_llamaswap_unserialisable_result_raises_llmerror__DoD6(monkeypatch, stream, make):
-    """An unserialisable mapping/list result ends with LLMError naming the tool (DoD-6)."""
-    await _check_unserialisable_result(monkeypatch, _llamaswap(), stream, make)
+    """Strict: an unserialisable mapping/list result ends with LLMError naming the tool (DoD-6; 006/009 DoD-10)."""
+    await _check_unserialisable_result(monkeypatch, _llamaswap(), stream, make, tool_errors="raise")
 
 
 @pytest.mark.asyncio
@@ -589,15 +635,15 @@ async def test_llamaswap_round_limit_of_two_sends_two_requests__DoD9(monkeypatch
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_llamaswap_raising_tool_still_runtimeerror__DoD10(monkeypatch, stream):
-    """A tool that raises still ends with RuntimeError naming the tool (DoD-10)."""
-    await _check_tool_raises(monkeypatch, _llamaswap(), stream)
+    """Strict: a tool that raises still ends with RuntimeError naming the tool (DoD-10; 006/009 DoD-10)."""
+    await _check_tool_raises(monkeypatch, _llamaswap(), stream, tool_errors="raise")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", STREAM_MODES)
 async def test_llamaswap_bad_argument_name_still_valueerror__DoD10(monkeypatch, stream):
-    """An argument name the callable lacks still ends with ValueError; the tool does not run (DoD-10)."""
-    await _check_bad_argument_name(monkeypatch, _llamaswap(), stream)
+    """Strict: an undeclared argument name still ends with ValueError; tool not run (DoD-10; 006/009 DoD-10)."""
+    await _check_bad_argument_name(monkeypatch, _llamaswap(), stream, tool_errors="raise")
 
 
 @pytest.mark.asyncio

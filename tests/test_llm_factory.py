@@ -8,6 +8,13 @@ Feature 003 (DEC-003-8, DEC-arch-4): the ``protocol`` argument picks the Respons
 chat-completions class (DoD-3, DoD-4), never depending on the address (DoD-5); unknown protocol
 values (DoD-6) and any protocol on Ollama (DoD-7) are refused; the earlier refusals still hold
 (DoD-8).
+Feature 006 step 003 (DEC-arch-24, DEC-006-5): ``read_timeout`` is forwarded to the class the
+factory picks for ``openai`` and ``llamaswap`` on both protocols, refused with ``ValueError``
+naming it on ``ollama``, and leaving it out builds every backend as before (tests suffixed
+``__s003_DoD9``).
+Feature 006 step 004 (DEC-arch-27, DEC-006-5): ``trace`` is accepted by keyword for every backend and
+protocol, Ollama included (tests suffixed ``__s004_DoD5``); its effect needs the environment and is tested
+in ``test_llm_trace_switch.py``.
 Every client is built with explicit arguments and no process environment variable is set
 anywhere in this file (001.core-fixes DoD-6); the last test checks that property on this file's
 own source, so every call here passes kind, base URL and model positionally and every ``openai``
@@ -242,6 +249,132 @@ def test_llamaswap_factory_builds_with_and_without_credential__DoD8(protocol):
     expected = LlamaSwapChatCompletionsClient if protocol == "chat_completions" else LlamaSwapAPIClient
     assert type(with_token) is expected
     assert type(without_token) is expected
+
+
+# --- Feature 006 step 003: the read_timeout argument (DEC-arch-24, DEC-006-5) ------------------
+
+# A distinctive silence limit and total, so a stored value can only have come from this call.
+_READ_TIMEOUT = 12.5
+_TOTAL = 42.0
+
+
+@pytest.mark.parametrize("protocol", _ACCEPTED_PROTOCOLS)
+def test_openai_factory_forwards_read_timeout__s003_DoD9(protocol):
+    """Step 003 DoD-9: ``openai`` forwards ``read_timeout`` to the class it picks, on both protocols."""
+    client = get_llm_client(
+        "openai",
+        _OPENAI_URL,
+        "gpt-4o-mini",
+        _TOTAL,
+        bearer_token=_OPENAI_TOKEN,
+        protocol=protocol,
+        read_timeout=_READ_TIMEOUT,
+    )
+    expected = OpenAIChatCompletionsClient if protocol == "chat_completions" else OpenAIAPIClient
+    assert type(client) is expected
+    assert client.read_timeout == _READ_TIMEOUT
+    assert client.timeout == _TOTAL
+    assert client.bearer_token == _OPENAI_TOKEN
+
+
+@pytest.mark.parametrize("protocol", _ACCEPTED_PROTOCOLS)
+def test_llamaswap_factory_forwards_read_timeout__s003_DoD9(protocol):
+    """Step 003 DoD-9: ``llamaswap`` forwards ``read_timeout`` to the class it picks, on both protocols."""
+    client = get_llm_client(
+        "llamaswap", _LLAMASWAP_URL, "mistral", _TOTAL, protocol=protocol, read_timeout=_READ_TIMEOUT
+    )
+    expected = LlamaSwapChatCompletionsClient if protocol == "chat_completions" else LlamaSwapAPIClient
+    assert type(client) is expected
+    assert client.read_timeout == _READ_TIMEOUT
+    assert client.timeout == _TOTAL
+
+
+@pytest.mark.parametrize("read_timeout", [_READ_TIMEOUT, 0.5, 300])
+def test_ollama_factory_refuses_read_timeout__s003_DoD9(read_timeout):
+    """Step 003 DoD-9: ``ollama`` with a ``read_timeout`` raises ``ValueError`` whose message names ``read_timeout``."""
+    with pytest.raises(ValueError) as exc_info:
+        get_llm_client("ollama", _OLLAMA_URL, "llama3", read_timeout=read_timeout)
+    assert "read_timeout" in str(exc_info.value)
+
+
+def test_ollama_factory_with_none_read_timeout_builds__s003_DoD9():
+    """Step 003 DoD-9: ``read_timeout=None`` counts as not given, so ``ollama`` is still built (DEC-arch-24)."""
+    client = get_llm_client("ollama", _OLLAMA_URL, "llama3", read_timeout=None)
+    assert isinstance(client, OllamaAPIClient)
+    assert client.model == "llama3"
+
+
+@pytest.mark.parametrize("protocol", _ACCEPTED_PROTOCOLS)
+def test_openai_factory_without_read_timeout_has_none__s003_DoD9(protocol):
+    """Step 003 DoD-9: ``openai`` built without ``read_timeout`` is as before: right class, no silence limit."""
+    client = get_llm_client("openai", _OPENAI_URL, "gpt-4o-mini", bearer_token=_OPENAI_TOKEN, protocol=protocol)
+    expected = OpenAIChatCompletionsClient if protocol == "chat_completions" else OpenAIAPIClient
+    assert type(client) is expected
+    assert client.read_timeout is None
+    assert client.bearer_token == _OPENAI_TOKEN
+
+
+@pytest.mark.parametrize("protocol", _ACCEPTED_PROTOCOLS)
+def test_llamaswap_factory_without_read_timeout_has_none__s003_DoD9(protocol):
+    """Step 003 DoD-9: ``llamaswap`` built without ``read_timeout`` is as before: right class, no silence limit."""
+    client = get_llm_client("llamaswap", _LLAMASWAP_URL, "mistral", protocol=protocol)
+    expected = LlamaSwapChatCompletionsClient if protocol == "chat_completions" else LlamaSwapAPIClient
+    assert type(client) is expected
+    assert client.read_timeout is None
+
+
+def test_ollama_factory_without_read_timeout_builds__s003_DoD9():
+    """Step 003 DoD-9: ``ollama`` built without ``read_timeout`` still returns the Ollama client."""
+    client = get_llm_client("ollama", _OLLAMA_URL, "llama3")
+    assert isinstance(client, OllamaAPIClient)
+    assert client.model == "llama3"
+
+
+# --- Feature 006 step 004: the trace argument (DEC-arch-27, DEC-006-5) ----------------------------
+# Only environment-independent checks live here (this file sets no environment): every backend and protocol
+# accepts ``trace`` by keyword and still builds the class it picks. Whether the forwarded switch takes effect
+# (records written or not, refusal without a folder) needs the environment and is checked in
+# ``test_llm_trace_switch.py``.
+
+# ``False`` never traces and ``None`` means "not passed", so neither depends on the environment (DEC-arch-27).
+_ENV_INDEPENDENT_TRACE = [False, None]
+
+
+@pytest.mark.parametrize("trace", _ENV_INDEPENDENT_TRACE)
+@pytest.mark.parametrize("protocol", _ACCEPTED_PROTOCOLS)
+def test_openai_factory_accepts_trace__s004_DoD5(protocol, trace):
+    """Step 004 DoD-5: ``openai`` takes ``trace`` by keyword after ``read_timeout`` and builds the class it picks."""
+    client = get_llm_client(
+        "openai",
+        _OPENAI_URL,
+        "gpt-4o-mini",
+        bearer_token=_OPENAI_TOKEN,
+        protocol=protocol,
+        read_timeout=_READ_TIMEOUT,
+        trace=trace,
+    )
+    expected = OpenAIChatCompletionsClient if protocol == "chat_completions" else OpenAIAPIClient
+    assert type(client) is expected
+    assert client.bearer_token == _OPENAI_TOKEN
+    assert client.read_timeout == _READ_TIMEOUT
+
+
+@pytest.mark.parametrize("trace", _ENV_INDEPENDENT_TRACE)
+@pytest.mark.parametrize("protocol", _ACCEPTED_PROTOCOLS)
+def test_llamaswap_factory_accepts_trace__s004_DoD5(protocol, trace):
+    """Step 004 DoD-5: ``llamaswap`` takes ``trace`` by keyword and builds the class it picks."""
+    client = get_llm_client("llamaswap", _LLAMASWAP_URL, "mistral", protocol=protocol, trace=trace)
+    expected = LlamaSwapChatCompletionsClient if protocol == "chat_completions" else LlamaSwapAPIClient
+    assert type(client) is expected
+    assert client.model == "mistral"
+
+
+@pytest.mark.parametrize("trace", _ENV_INDEPENDENT_TRACE)
+def test_ollama_factory_accepts_trace__s004_DoD5(trace):
+    """Step 004 DoD-5: unlike ``read_timeout``, ``trace`` is accepted for ``ollama`` and the Ollama client is built."""
+    client = get_llm_client("ollama", _OLLAMA_URL, "llama3", trace=trace)
+    assert isinstance(client, OllamaAPIClient)
+    assert client.model == "llama3"
 
 
 def _factory_calls(tree: ast.AST) -> list[ast.Call]:

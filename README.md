@@ -64,8 +64,9 @@ client = get_llm_client("openai", "https://api.openai.com/v1", "gpt-4o", bearer_
 client = get_llm_client("llamaswap", "http://localhost:8080/v1", "qwen3", protocol="chat_completions")
 ```
 
-`get_llm_client(server_type, base_url, model, timeout=600.0, bearer_token=None, default_options=None, protocol=None)`
-picks the class from `server_type` and `protocol` and forwards the other arguments unchanged:
+`get_llm_client(server_type, base_url, model, timeout=600.0, bearer_token=None, default_options=None, protocol=None,
+*, read_timeout=None, trace=None)` picks the class from `server_type` and `protocol` and forwards the other arguments
+unchanged (see [Time limits](#time-limits) and [Debug Trace Logging](#debug-trace-logging)):
 
 | `server_type` | `protocol=None` or `"responses"` | `protocol="chat_completions"` |
 |---------------|----------------------------------|-------------------------------|
@@ -79,7 +80,9 @@ The factory raises `ValueError` for:
 - any `protocol` given with `"ollama"` — a protocol choice is not offered on Ollama;
 - a `protocol` other than `"responses"` or `"chat_completions"` (the message names the value). Matching is exact:
   `"Responses"` or `" responses"` is refused;
-- `"openai"` without a `bearer_token`, whichever protocol.
+- `"openai"` without a `bearer_token`, whichever protocol;
+- `read_timeout` given with `"ollama"` (Ollama has no streaming);
+- `trace=True` when `LLM_TRACE_FOLDER` is not set.
 
 ### Direct client instantiation
 
@@ -141,6 +144,14 @@ json_str = await client.chat_json([
 On OpenAI and llama-swap, `chat_with_tools` works on both the Responses classes and the chat-completions
 classes, streamed and not (see [Protocols](#protocols)).
 
+**A failing tool call does not end the conversation by default.** When a tool call fails, the model is told with a
+short fixed text and the conversation goes on, so the model can correct itself or answer without the tool. Pass
+`tool_errors="raise"` to get the earlier behaviour back: the call ends with an exception and the model is not told
+(see [Tool failures](#tool-failures)).
+
+> **Changed in 0.2.1:** tolerant handling (`tool_errors="result"`) is now the default on the four OpenAI-family
+> classes. Code that relied on a tool failure ending the call must pass `tool_errors="raise"`.
+
 ```python
 def get_weather(city: str) -> dict:
     return {"city": city, "temp": "22C"}
@@ -163,6 +174,99 @@ reply = await client.chat_with_tools(
     tools_definitions=tools_defs,
     tools={"get_weather": get_weather},
 )
+```
+
+Tools may be plain functions or coroutine functions. Tools requested in one reply run one after another, in the
+order the model asked for them. `max_loops` (default 5) bounds the number of server rounds; a model that keeps asking
+for tools past it ends the call with an error, whichever failure handling is chosen.
+
+#### Tool failures
+
+A tool call can fail in five ways (the names are `ToolErrorKind`, exported from `llm`):
+
+| Kind | What happened |
+|------|---------------|
+| `not_offered` | the model asked for a tool that was not offered, or gave an empty name |
+| `bad_arguments` | the model's arguments cannot be read, or are not an object of named values |
+| `unknown_argument` | the model passed an argument name the tool function does not declare |
+| `tool_raised` | the tool raised an exception |
+| `unserialisable_result` | the tool's result cannot be turned into text |
+
+`tool_errors` chooses what happens:
+
+- `"result"` (default, tolerant) — the failing tool is not run (or its exception is caught), the model receives a
+  short fixed text as that call's result, and the loop goes on. The texts say only that the tool is not available,
+  that its arguments are invalid, which argument is unknown, or that the tool failed; they never carry the
+  exception's text, so your application's internals are not sent to the provider. Other tool calls of the same
+  round still run, in order.
+- `"raise"` (strict) — the call ends with the exception that failure has always raised: `LLMError` for
+  `not_offered`, `bad_arguments` and `unserialisable_result`, `ValueError` for `unknown_argument`, `RuntimeError`
+  for `tool_raised`. The model is not told.
+
+```python
+# Strict: a broken tool ends the call
+reply = await client.chat_with_tools(
+    messages,
+    tools_definitions=tools_defs,
+    tools={"get_weather": get_weather},
+    tool_errors="raise",
+)
+```
+
+In both modes only ordinary exceptions are handled: cancelling the call (for example `asyncio.CancelledError`)
+stops it and is never reported to the model as a tool result. The round limit applies unchanged in both modes.
+
+#### Tool event observer
+
+Pass `on_tool_event` to see every tool call as it happens. The observer receives one `ToolEvent` (a typed
+dictionary exported from `llm`) per event:
+
+| Field | Meaning |
+|-------|---------|
+| `type` | `"start"`, `"result"` or `"error"` |
+| `name` | the tool name the model asked for |
+| `call_id` | the server's id for the call, or `None` when the server gave none |
+| `arguments` | the arguments exactly as the model sent them, as text (empty text when there were none) |
+| `output` | on a `"result"` event, the result text the model receives; otherwise `None` |
+| `error_kind` | on an `"error"` event, the `ToolErrorKind`; otherwise `None` |
+
+For each tool call the observer gets a `"start"` event before the tool runs, then exactly one `"result"` or
+`"error"` event — also when the tool never runs (`not_offered`, `bad_arguments`, `unknown_argument`). Calls are
+reported in the order they run. The observer may be a plain function or a coroutine function; the loop waits for it
+to finish with each event before going on.
+
+```python
+from llm import ToolEvent
+
+def log_tool(event: ToolEvent) -> None:
+    if event["type"] == "error":
+        print(f"tool {event['name']} failed: {event['error_kind']}")
+
+reply = await client.chat_with_tools(
+    messages,
+    tools_definitions=tools_defs,
+    tools={"get_weather": get_weather},
+    on_tool_event=log_tool,
+)
+```
+
+If the observer itself raises:
+
+- strict (`tool_errors="raise"`) — the observer sees the `"error"` event before the call ends with its exception;
+  an exception from the observer ends the call and reaches you unchanged.
+- tolerant (default) — the observer's failure is treated like a tool failure: a tool not yet run is not run, the
+  model is told the tool failed, and the loop goes on. The observer receives no further event for that tool call.
+  The library emits `LLMToolObserverWarning` (a `UserWarning` subclass exported from `llm`, filterable like any
+  warning) and records the failure in the trace.
+
+#### Tools that accept any arguments
+
+The argument names the model sends must exist in the tool function's parameters. A function that accepts
+`**kwargs` skips this check and runs with whatever arguments the model sends:
+
+```python
+def lookup(**kwargs) -> dict:
+    return {"received": kwargs}
 ```
 
 ### Tool Calling with JSON Output
@@ -266,15 +370,68 @@ warnings.filterwarnings("ignore", category=LLMSettingIgnoredWarning)   # silence
 warnings.filterwarnings("error", category=LLMSettingIgnoredWarning)    # or turn it into an exception
 ```
 
+### Errors
+
+Failures of a library operation reach you as `LLMError` (exported from `llm`). Its text form is unchanged:
+`message: description`, or just `message`. Two attributes let you tell failures apart without reading the text:
+
+- `status` — the HTTP status when the server refused the request (a non-2xx reply), otherwise `None`.
+- `kind` — one `LLMErrorKind` name, or `None`:
+
+| `kind` | Meaning |
+|--------|---------|
+| `"status"` | the server refused the request; `status` holds the HTTP status |
+| `"timeout"` | the total time limit or the silence limit was exceeded |
+| `"connection"` | the server could not be reached |
+| `"interrupted"` | the transfer was cut mid-reply |
+| `"invalid_reply"` | the reply could not be read (malformed model list or embeddings, a JSON answer that does not parse) |
+| `"server_failed"` | the server reported a failure, in a stream or in its reply |
+| `"incomplete"` | the reply was incomplete (a stream that ended early, a reply the server marked incomplete) |
+| `"tool"` | a tool conversation failed in strict mode (`not_offered`, `bad_arguments`, `unserialisable_result`) |
+
+```python
+from llm import LLMError
+
+try:
+    reply = await client.chat(messages)
+except LLMError as exc:
+    if exc.kind == "status" and exc.status == 429:
+        ...  # rate limited
+    elif exc.kind == "timeout":
+        ...
+```
+
+`ValueError` and `RuntimeError` raised by the library (bad arguments, the round limit, strict tool failures) are
+unchanged and carry no kind.
+
+### Time limits
+
+- `timeout` (constructor and factory, default 600 seconds) — one total limit per request, streamed or not.
+- `read_timeout` (constructor and factory, optional; OpenAI and llama-swap classes) — a limit on silence between
+  two reads of a streamed reply. A stream that sends nothing for longer fails with `LLMError` (`kind="timeout"`);
+  a stream that keeps producing pieces runs to the end. It does not change `timeout` and does not affect
+  non-streamed requests. Not passed means no silence limit. The factory refuses it with `ValueError` for Ollama.
+
+```python
+client = OpenAIAPIClient("gpt-4o", bearer_token=api_key, timeout=300.0, read_timeout=30.0)
+```
+
+### Ollama (deprecated)
+
+`OllamaAPIClient` is deprecated and kept for observation only. It does not accept `tool_errors`, `on_tool_event`
+or `read_timeout` (passing them raises `TypeError`; the factory refuses `read_timeout` with `ValueError`), and a
+failing tool call still ends its tool conversation with an exception. It does accept `trace`.
+
 ## Architecture
 
 ```
 llm/
   __init__.py       # Public API exports
-  exceptions.py     # LLMError exception, LLMSettingIgnoredWarning category
+  exceptions.py     # LLMError, LLMErrorKind, LLMSettingIgnoredWarning, LLMToolObserverWarning
+  tool_events.py    # ToolEvent, ToolErrorKind
   message.py        # LLMMessage TypedDict
   options.py        # BaseLLMOptions, OllamaOptions, OpenAIOptions
-  llm_client.py     # Shared base class (LLMClient): HTTP/SSE plumbing, options merge; no abc
+  llm_client.py     # Shared base class (LLMClient): HTTP/SSE transport plumbing, options merge; no abc
   ollama.py         # OllamaAPIClient
   openai.py         # OpenAIAPIClient (Responses)
   openai_chat_completions.py      # OpenAIChatCompletionsClient (Chat Completions)
@@ -300,6 +457,21 @@ The library never reads a credential from the environment: the app passes the Op
 Set both `LLM_TRACE=1` and `LLM_TRACE_FOLDER=/path/to/traces` to write a human-readable log file for every LLM interaction. Each file captures system prompts, message history, request payloads, streaming chunks, tool calls, tool results, and responses.
 
 Files are written to `<LLM_TRACE_FOLDER>/<YYYY-MM-DD>/llm-trace-<YYYYMMDD-HHMMSSffffff>.log`. When disabled (default), tracing has zero overhead.
+
+The `trace` argument (every client constructor and the factory) decides per client, read once when the client is
+created:
+
+- not passed (`None`) — the environment decides, as described above;
+- `False` — this client never traces, whatever the environment says;
+- `True` — this client traces into `LLM_TRACE_FOLDER` even when `LLM_TRACE` is off; without `LLM_TRACE_FOLDER`
+  the client is refused with `ValueError`.
+
+```python
+client = get_llm_client("llamaswap", "http://localhost:8080/v1", "qwen3", trace=False)
+```
+
+In a tool conversation with tolerant handling, a failing call's `TOOL RESULT` entry shows the text the model was
+told, followed by a note naming the failure kind; a failing tool-event observer is recorded as well.
 
 ## License
 

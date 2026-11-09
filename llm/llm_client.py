@@ -1,7 +1,9 @@
 """Shared base client for every LLM backend: HTTP request and streamed-request plumbing, SSE reading and
 stream parsing, and the three-layer option merge that the backend clients inherit.
 """
-from typing import Any, Awaitable, Callable, Dict, List, Optional, AsyncIterator
+from collections.abc import Mapping, Sequence
+from types import TracebackType
+from typing import Any, Awaitable, Callable, Dict, Generic, List, Literal, Optional, AsyncIterator, Self, TypeVar
 import codecs
 import inspect
 import json
@@ -9,22 +11,60 @@ import re
 from contextlib import AsyncExitStack, asynccontextmanager
 import aiohttp
 
-from llm.exceptions import LLMError
+from llm.exceptions import LLMError, LLMErrorKind
 from llm.message import LLMMessage
-from llm.options import BaseLLMOptions
+from llm.tool_events import ToolEvent
 from llm.trace import LLMTracer
 
+OptionsT = TypeVar("OptionsT")
+"""The settings shape a client class binds (e.g. ``OpenAIOptions``); unbounded so a ``TypedDict`` shape fits."""
 
-class LLMClient:
-    """Base class for LLM API clients; subclasses override the methods that raise NotImplementedError."""
-    def __init__(self, model: str, base_url: str, timeout: float, bearer_token: Optional[str] = None, default_options: Optional[BaseLLMOptions] = None) -> None:
+
+class LLMClient(Generic[OptionsT]):
+    """Base class for LLM API clients; subclasses override the methods that raise NotImplementedError.
+
+    Generic over the settings shape ``OptionsT``: each client class binds its own shape, so ``default_options``
+    and every operation's ``options`` are typed per class (interfaces.md § Exposed: typing contract).
+    """
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        timeout: float,
+        bearer_token: Optional[str] = None,
+        default_options: Optional[OptionsT] = None,
+        *,
+        read_timeout: float | None = None,
+        trace: bool | None = None,
+    ) -> None:
+        """Store the connection settings shared by every backend client; no session is opened here.
+
+        Args:
+            model: Model name sent with every request.
+            base_url: API root; a trailing slash is stripped.
+            timeout: Total per-request time limit in seconds (every request, streamed or not).
+            bearer_token: Optional credential sent as ``Authorization: Bearer <token>``.
+            default_options: Client-level settings, merged under per-call settings.
+            read_timeout: Silence limit in seconds for streamed requests (aiohttp per-read limit,
+                ``sock_read``), or ``None`` for no silence limit. Non-streamed requests keep the total limit
+                only (DEC-arch-20, DEC-006-5). Stored as ``self.read_timeout``.
+            trace: Per-client trace switch (DEC-arch-27, DEC-006-5): ``None`` -> the environment decides
+                (DEC-000-4); ``False`` -> never traces; ``True`` -> traces into ``LLM_TRACE_FOLDER`` without
+                consulting ``LLM_TRACE``. The tracer is built once, here, through ``LLMTracer._from_switch``.
+
+        Raises:
+            ValueError: ``trace=True`` while ``LLM_TRACE_FOLDER`` is unset or empty (the message names it);
+                raised at creation, before any request.
+        """
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.session: Optional[aiohttp.ClientSession] = None
         self.timeout = timeout
+        self.read_timeout = read_timeout
         self.bearer_token = bearer_token
         self.default_options = default_options
-        self._tracer = LLMTracer()
+        # Built once here so a trace=True refusal surfaces at client creation (DEC-006-5, DEC-006-6).
+        self._tracer = LLMTracer._from_switch(trace)
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure session is created."""
@@ -32,7 +72,7 @@ class LLMClient:
             self.session = aiohttp.ClientSession()
         return self.session
 
-    async def _request(self, method: str, path: str, **kw) -> Any:
+    async def _request(self, method: str, path: str, **kw: Any) -> Any:
         """Send one non-streamed request to ``base_url + path`` and return the decoded reply.
 
         Args:
@@ -50,7 +90,9 @@ class LLMClient:
                 reading the body (connection error, server disconnect, payload error, timeout), chained from
                 the original, with a message naming the address and the failure kind and the original
                 exception's text as description; that text never contains the credential nor the phrase
-                ``"status <n>"`` (DEC-001-7).
+                ``"status <n>"`` (DEC-001-7). ``kind`` is ``"status"`` (with ``status`` = the HTTP status) for
+                a non-2xx reply, and ``"timeout"`` / ``"interrupted"`` / ``"connection"`` for a transport
+                failure (DEC-arch-19).
         """
         session = await self._ensure_session()
         url = f"{self.base_url}{path}"
@@ -68,7 +110,13 @@ class LLMClient:
                 except aiohttp.ClientResponseError as exc:
                     # The body must be read while the response is still open (inside the ``async with``).
                     text = await r.text()
-                    raise LLMError(f"Request to {url} failed with status {r.status}", description=text) from exc
+                    # DEC-arch-19: a non-2xx reply carries kind "status" and the HTTP status; text unchanged.
+                    raise LLMError(
+                        f"Request to {url} failed with status {r.status}",
+                        description=text,
+                        status=r.status,
+                        kind="status",
+                    ) from exc
 
                 content_type = r.headers.get("Content-Type", "")
                 if content_type.startswith("application/json"):
@@ -82,26 +130,29 @@ class LLMClient:
         except (aiohttp.ClientError, TimeoutError) as exc:
             # DEC-001-7: connection errors, disconnects, payload errors and timeouts (on 3.11
             # asyncio.TimeoutError is TimeoutError; ServerTimeoutError is both) become LLMError. Timeout is
-            # tested first because ServerTimeoutError is also a ClientError.
+            # tested first because ServerTimeoutError is also a ClientError. The text kind keeps the
+            # DEC-001-7 wording; error_kind is the matching LLMErrorKind (DEC-arch-19).
+            error_kind: LLMErrorKind
             if isinstance(exc, TimeoutError):
-                kind = "timeout"
+                kind, error_kind = "timeout", "timeout"
             elif isinstance(exc, (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError)):
-                kind = "interrupted transfer"
+                kind, error_kind = "interrupted transfer", "interrupted"
             else:
-                kind = "connection failure"
+                kind, error_kind = "connection failure", "connection"
             # Timeouts often carry no text; the type name keeps the description informative. The token is
             # redacted defensively: the text comes from aiohttp, never from our headers (DEC-001-7).
             description = str(exc) or type(exc).__name__
             if self.bearer_token:
                 description = description.replace(self.bearer_token, "***")
-            raise LLMError(f"Request to {url} failed: {kind}", description=description) from exc
+            raise LLMError(f"Request to {url} failed: {kind}", description=description, kind=error_kind) from exc
 
     @asynccontextmanager
     async def _stream_post(self, path: str, payload: dict[str, Any]) -> AsyncIterator[aiohttp.ClientResponse]:
         """Open a streamed POST to ``base_url + path`` and yield the open response (DEC-001-8).
 
         Ensures the session, adds ``Authorization: Bearer <token>`` only when the client holds a token,
-        bounds the request by ``ClientTimeout(total=self.timeout)`` and posts ``payload`` as JSON. On a 2xx
+        bounds the request by ``ClientTimeout(total=self.timeout, sock_read=self.read_timeout)`` (the silence
+        limit only when ``read_timeout`` is set, DEC-arch-20) and posts ``payload`` as JSON. On a 2xx
         reply the open response is yielded for the caller to read and released when the block exits.
 
         Args:
@@ -116,7 +167,7 @@ class LLMClient:
                 message ``"Request to <url> failed with status <n>"`` and the reply text as description
                 (DEC-000-11, DEC-arch-5). On a transport failure while opening the request (connection
                 error, timeout), chained from the original, per DEC-001-7. The credential never appears
-                in the error text.
+                in the error text. ``kind`` / ``status`` as in ``_request`` (DEC-arch-19).
 
         Exceptions raised inside the caller's ``async with`` block are not caught or converted; they reach
         the caller unchanged (DEC-000-23).
@@ -129,7 +180,9 @@ class LLMClient:
         if self.bearer_token:
             headers["Authorization"] = f"Bearer {self.bearer_token}"
 
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        # DEC-arch-20: streamed requests add the per-read (silence) limit next to the unchanged total;
+        # sock_read=None is aiohttp's own "no per-read limit", so an unset read_timeout changes nothing.
+        timeout = aiohttp.ClientTimeout(total=self.timeout, sock_read=self.read_timeout)
 
         async with AsyncExitStack() as stack:
             # Only opening the request and the non-2xx check are mapped; the ``yield`` sits outside this
@@ -141,22 +194,32 @@ class LLMClient:
                 if not 200 <= response.status < 300:
                     # Read the reply while the response is still open; same format as _request (DEC-000-11).
                     text = await response.text()
-                    raise LLMError(f"Request to {url} failed with status {response.status}", description=text)
+                    # DEC-arch-19: kind "status" plus the HTTP status; text unchanged (DEC-arch-5).
+                    raise LLMError(
+                        f"Request to {url} failed with status {response.status}",
+                        description=text,
+                        status=response.status,
+                        kind="status",
+                    )
             except aiohttp.ClientResponseError:
                 # A status error is not a transport failure; never relabel it (see _request).
                 raise
             except (aiohttp.ClientError, TimeoutError) as exc:
-                # DEC-001-7 mapping, identical to _request (timeout first: ServerTimeoutError is both).
+                # DEC-001-7 mapping, identical to _request (timeout first: ServerTimeoutError is both);
+                # error_kind is the matching LLMErrorKind (DEC-arch-19).
+                error_kind: LLMErrorKind
                 if isinstance(exc, TimeoutError):
-                    kind = "timeout"
+                    kind, error_kind = "timeout", "timeout"
                 elif isinstance(exc, (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError)):
-                    kind = "interrupted transfer"
+                    kind, error_kind = "interrupted transfer", "interrupted"
                 else:
-                    kind = "connection failure"
+                    kind, error_kind = "connection failure", "connection"
                 description = str(exc) or type(exc).__name__
                 if self.bearer_token:
                     description = description.replace(self.bearer_token, "***")
-                raise LLMError(f"Request to {url} failed: {kind}", description=description) from exc
+                raise LLMError(
+                    f"Request to {url} failed: {kind}", description=description, kind=error_kind
+                ) from exc
 
             # The exit stack releases the response when the caller's block exits, normally or by exception.
             yield response
@@ -182,7 +245,9 @@ class LLMClient:
 
         Raises:
             LLMError: When reading the stream fails in transport (payload error, server disconnect,
-                timeout), chained from the original, with the DEC-001-7 message rule (DEC-001-1). Only the
+                timeout, the silence limit included), chained from the original, with the DEC-001-7 message
+                rule (DEC-001-1) and ``kind`` ``"timeout"`` / ``"interrupted"`` / ``"connection"``
+                (DEC-arch-19). Only the
                 reading is mapped; exceptions raised by the consumer between yields are not caught here.
         """
         # One incremental decoder for the whole stream keeps a character split between reads whole;
@@ -239,16 +304,21 @@ class LLMClient:
             except (aiohttp.ClientError, TimeoutError) as exc:
                 # Same kinds and shape as _request / _stream_post (DEC-001-7); the address is the
                 # response's URL. Timeout first: ServerTimeoutError is both a TimeoutError and a ClientError.
+                # The silence limit (sock_read, DEC-arch-20) expires here as aiohttp's socket-read timeout,
+                # a TimeoutError subclass, so it maps to kind "timeout" like the total limit (DEC-arch-19).
+                error_kind: LLMErrorKind
                 if isinstance(exc, TimeoutError):
-                    kind = "timeout"
+                    kind, error_kind = "timeout", "timeout"
                 elif isinstance(exc, (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError)):
-                    kind = "interrupted transfer"
+                    kind, error_kind = "interrupted transfer", "interrupted"
                 else:
-                    kind = "connection failure"
+                    kind, error_kind = "connection failure", "connection"
                 description = str(exc) or type(exc).__name__
                 if self.bearer_token:
                     description = description.replace(self.bearer_token, "***")
-                raise LLMError(f"Request to {url} failed: {kind}", description=description) from exc
+                raise LLMError(
+                    f"Request to {url} failed: {kind}", description=description, kind=error_kind
+                ) from exc
 
             for line in split(decoder.decode(chunk)):
                 event = take_line(line)
@@ -284,7 +354,8 @@ class LLMClient:
 
         Raises:
             LLMError: When the object has a truthy ``error``, whether or not it also has ``choices``; the
-                description is ``error.message`` when that is a string, otherwise the error as JSON text.
+                description is ``error.message`` when that is a string, otherwise the error as JSON text;
+                ``kind="server_failed"`` (DEC-arch-19).
         """
         try:
             payload = json.loads(data)
@@ -298,7 +369,7 @@ class LLMClient:
                 reason = error["message"]
             else:
                 reason = json.dumps(error, ensure_ascii=False)
-            raise LLMError("The server reported an error in the stream", description=reason)
+            raise LLMError("The server reported an error in the stream", description=reason, kind="server_failed")
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:
             return None
@@ -338,7 +409,8 @@ class LLMClient:
             LLMError: On an error frame (an object with ``error``), with the server's reason in the text;
                 no later piece reaches the receiver (DEC-001-9). On an early end: the stream ends with
                 neither ``[DONE]`` nor a non-null ``finish_reason`` on any choice (DEC-001-1). On a
-                transport failure raised by the reader.
+                transport failure raised by the reader. Kinds: ``"server_failed"`` for the error frame,
+                ``"incomplete"`` for the early end (DEC-arch-19).
             Exception: Any exception raised by ``on_delta`` propagates unchanged and ends the call
                 (DEC-000-23).
         """
@@ -385,7 +457,7 @@ class LLMClient:
                         await result
 
         if not completed:
-            raise LLMError("The stream ended before the reply was complete")
+            raise LLMError("The stream ended before the reply was complete", kind="incomplete")
 
         # Close unclosed thinking tag
         if in_reasoning:
@@ -400,11 +472,26 @@ class LLMClient:
     @staticmethod
     def _merge_options_base(
             *,
-        options: Optional[Dict[str, Any]],
+        options: Optional[Mapping[str, Any]],
         supported_params: Dict[str, Any],
         alias_map: Dict[str, str],
-        default_opts: Optional[Dict[str, Any]] = None,
+        default_opts: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Merge the three option layers: backend defaults, then constructor defaults, then call-time options.
+
+        Keys are resolved through ``alias_map``; keys the backend does not support are dropped and ``None``
+        values are removed from the result (DEC-arch-25; behaviour unchanged). The option layers are typed as
+        read-only mappings so each class's ``TypedDict`` settings shape passes without a cast.
+
+        Args:
+            options: Call-time options, or ``None``.
+            supported_params: The backend's supported keys with their default values.
+            alias_map: Alternative key names mapped to the supported key.
+            default_opts: Constructor default options, or ``None``.
+
+        Returns:
+            A new dict of the merged, supported, non-``None`` options.
+        """
         opts: Dict[str, Any] = dict(supported_params)          # defaults
 
         # 1. constructor default options
@@ -427,9 +514,24 @@ class LLMClient:
     def _merge_options(
         self,
         *,
-        options: Optional[Dict[str, Any]],
+        options: Optional[OptionsT],
     ) -> Dict[str, Any]:
-        # This method will be implemented by subclasses
+        """
+        Merge the call-time settings into this client's effective request options (declaration only).
+
+        Each client class overrides this, typically delegating to ``_merge_options_base`` with its own
+        supported-parameter and alias tables and then post-processing the result.
+
+        Args:
+            options: Call-time settings in the class's own settings shape, merged over the constructor
+                defaults; ``None`` means no call-time settings.
+
+        Returns:
+            A new dict of the merged options the client sends.
+
+        Raises:
+            NotImplementedError: Always, on the base class.
+        """
         raise NotImplementedError
 
     async def list_models(self) -> List[str]:
@@ -443,10 +545,27 @@ class LLMClient:
         prompt: str,
         *,
         system: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[OptionsT] = None,
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
+        """
+        Generate a completion for a single prompt (declaration only; client classes override it).
+
+        Args:
+            prompt: The prompt text.
+            system: Optional system message.
+            options: Call-time settings in the class's own settings shape, merged over the constructor
+                defaults.
+            stream: Whether to stream the reply.
+            on_delta: Optional receiver called with each streamed text chunk.
+
+        Returns:
+            The reply text.
+
+        Raises:
+            NotImplementedError: Always, on the base class.
+        """
         raise NotImplementedError
 
     async def chat(
@@ -454,10 +573,27 @@ class LLMClient:
         messages: List[LLMMessage],
         *,
         system: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[OptionsT] = None,
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
+        """
+        Chat over a list of messages (declaration only; client classes override it).
+
+        Args:
+            messages: List of message dicts with role and content.
+            system: Optional system message.
+            options: Call-time settings in the class's own settings shape, merged over the constructor
+                defaults.
+            stream: Whether to stream the reply.
+            on_delta: Optional receiver called with each streamed text chunk.
+
+        Returns:
+            The reply text.
+
+        Raises:
+            NotImplementedError: Always, on the base class.
+        """
         raise NotImplementedError
 
     async def chat_json(
@@ -466,7 +602,7 @@ class LLMClient:
         *,
         response_schema: Optional[Dict[str, Any]] = None,
         system: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[OptionsT] = None,
     ) -> str:
         """
         Chat with structured JSON output using response schema.
@@ -486,19 +622,23 @@ class LLMClient:
         self,
         text: str,
         *,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[OptionsT] = None,
     ) -> List[float]:
-        """Embed a single text string and return its vector."""
+        """Embed a single text string and return its vector.
+
+        Raises:
+            LLMError: With ``kind="invalid_reply"`` when the batch result is empty (DEC-arch-19).
+        """
         vectors = await self.embed_batch([text], options=options)
         if not vectors:
-            raise LLMError("Embedding response was empty.")
+            raise LLMError("Embedding response was empty.", kind="invalid_reply")
         return vectors[0]
 
     async def embed_batch(
         self,
         texts: List[str],
         *,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[OptionsT] = None,
     ) -> List[List[float]]:
         """Embed multiple text strings and return a list of vectors."""
         raise NotImplementedError
@@ -507,7 +647,7 @@ class LLMClient:
         self,
         response: aiohttp.ClientResponse,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
-    ) -> tuple[str, list[dict]]:
+    ) -> tuple[str, list[dict[str, Any]]]:
         """Parse an OpenAI streaming response that may contain tool_calls.
 
         Assembles streamed tool_call fragments into calls and calls on_delta for content chunks.
@@ -557,18 +697,19 @@ class LLMClient:
         Raises:
             LLMError: On an error frame, with the server's reason in the text (DEC-001-9). On an early end:
                 the stream ends with neither ``[DONE]`` nor a non-null ``finish_reason`` on any choice
-                (DEC-001-1). On a transport failure raised by the reader.
+                (DEC-001-1). On a transport failure raised by the reader. Kinds: ``"server_failed"`` for the
+                error frame, ``"incomplete"`` for the early end (DEC-arch-19).
             Exception: Any exception raised by ``on_delta`` propagates unchanged and ends the call
                 (DEC-000-23).
         """
         content_chunks: List[str] = []
         # DEC-002-6: positioned calls keyed by position; positionless calls kept in order of appearance,
         # the last one being the "current" positionless call that new positionless fragments match against.
-        tool_call_map: Dict[int, dict] = {}
-        positionless_calls: list[dict] = []
+        tool_call_map: Dict[int, dict[str, Any]] = {}
+        positionless_calls: list[dict[str, Any]] = []
         in_reasoning = False
 
-        def new_tool_call() -> dict:
+        def new_tool_call() -> dict[str, Any]:
             """Return an empty call in the shape the tool loop reads (id "" until the server sends one)."""
             return {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
 
@@ -643,7 +784,7 @@ class LLMClient:
                 await emit(text)
 
         if not completed:
-            raise LLMError("The stream ended before the reply was complete")
+            raise LLMError("The stream ended before the reply was complete", kind="incomplete")
 
         # Close unclosed thinking tag: a round may end with reasoning plus tool_calls only
         if in_reasoning:
@@ -656,24 +797,52 @@ class LLMClient:
 
     async def chat_with_tools(
         self,
-        messages: List[Dict[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         *,
         tools_definitions: List[Dict[str, Any]],
         tools: Dict[str, Callable[..., Any]],
         system: Optional[str] = None,
         max_loops: int = 5,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[OptionsT] = None,
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        tool_errors: Literal["raise", "result"] = "result",
+        on_tool_event: Optional[Callable[[ToolEvent], Optional[Awaitable[None]]]] = None,
     ) -> str:
+        """Run a tool conversation; declared here, implemented by the OpenAI-family classes.
+
+        The declaration only fixes the shared signature so code typed against ``LLMClient`` (for example
+        the result of ``get_llm_client``) type-checks with every parameter the OpenAI-family classes accept
+        (DEC-006-10). It holds no tool-loop logic: each class runs its own copy (DEC-arch-15).
+
+        Args:
+            messages: Read-only sequence of turns, each a string-keyed mapping with values of any type, so
+                assistant turns carrying ``tool_calls`` and tool turns carrying ``tool_call_id`` type-check.
+                The caller's sequence is never modified.
+            options: Call-time settings in the class's own settings shape.
+            tool_errors: ``"result"`` (default, tolerant: a failing tool call is reported to the model) or
+                ``"raise"`` (strict: the call ends with the failure's exception), as the classes define it.
+            on_tool_event: Optional observer receiving one ``ToolEvent`` per tool-call event; a plain
+                function or one returning an awaitable, which the classes await inline (DEC-arch-18).
+
+        Raises:
+            NotImplementedError: always, on the base.
+        """
         raise NotImplementedError
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
+        """Open the usage scope: create the HTTP session and return this client typed as its own class."""
         await self._ensure_session()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Leave the usage scope: close the HTTP session if one is open; never suppresses the exception."""
         if self.session is not None:
             await self.session.close()
             self.session = None

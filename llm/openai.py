@@ -6,13 +6,15 @@ reply handling per DEC-003-11 / DEC-003-12; streamed ``chat`` / ``generate`` par
 Responses event stream (DEC-003-13). Feature 004: ``chat_with_tools`` runs the tool loop
 on Responses (flattened tools, call / result items, reasoning carried between rounds; DEC-004-5..11),
 replacing the DEC-003-4 refusal; streamed tool rounds are read by a separate tool-round
-parser (DEC-004-9). Model listing and
+parser (DEC-004-9). Feature 006: each tool call runs through ``_execute_tool_call`` -- tolerant
+failures by default with a strict opt-out, the tool-event observer, the ``**kwargs``-aware argument-name
+check (DEC-arch-14..18, DEC-arch-26, DEC-arch-28). Model listing and
 embeddings are unchanged from the chat-completions client (US-057.AC-2), which now lives in
 ``llm/openai_chat_completions.py``.
 """
 
-from collections.abc import Mapping
-from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Optional
+from collections.abc import Mapping, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Literal, NamedTuple, Optional, cast
 import json
 import inspect
 import warnings
@@ -20,9 +22,11 @@ import warnings
 import aiohttp
 
 from llm.llm_client import LLMClient
-from llm.exceptions import LLMError, LLMSettingIgnoredWarning
+from llm.exceptions import LLMError, LLMSettingIgnoredWarning, LLMToolObserverWarning
 from llm.message import LLMMessage
 from llm.options import OpenAIOptions
+from llm.tool_events import ToolErrorKind, ToolEvent
+from llm.trace import TraceSession
 
 # Settings the OpenAI client accepts. Every value is None: the table names the keys, it supplies no
 # built-in value, so only settings the app set reach the server (DEC-001-13, DEC-001-14).
@@ -52,7 +56,7 @@ _OPENAI_NO_COUNTERPART_PARAMS: frozenset[str] = frozenset(
 )
 
 
-async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str, **kwargs: Any) -> Any:
+async def _fetch_reply(client: LLMClient[Any], operation: str, method: str, path: str, **kwargs: Any) -> Any:
     """Send one non-streamed request for listing or embeddings and map an undecodable 2xx body.
 
     Args:
@@ -68,13 +72,18 @@ async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str
     Raises:
         LLMError: The successful body could not be decoded as JSON (chained from the decode error,
             DEC-002-10). An ``LLMError`` raised by ``_request`` (non-2xx, transport) passes through.
+            The decode error carries kind ``invalid_reply`` (DEC-arch-19); a pass-through keeps its own.
     """
     try:
         return await client._request(method, path, **kwargs)
     # DEC-002-10: only the two decode errors ``_request`` lets escape on a 2xx JSON body are mapped;
     # a broad ValueError catch could swallow unrelated errors. ``_request`` is not edited.
     except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
-        raise LLMError(f"Unreadable reply from OpenAI API when {operation}", description=str(exc)) from exc
+        raise LLMError(
+            f"Unreadable reply from OpenAI API when {operation}",
+            description=str(exc),
+            kind="invalid_reply",
+        ) from exc
 
 
 def _reply_text(response: Any) -> str:
@@ -97,20 +106,23 @@ def _reply_entries(response: Any, operation: str) -> list[Any]:
     Raises:
         LLMError: The reply is not a mapping (including a bytes body), has no ``data`` (the
             pre-existing message, reply inline), or ``data`` is not a list.
+            Every such error carries kind ``invalid_reply`` (DEC-arch-19).
     """
     if not isinstance(response, Mapping):
         raise LLMError(
             f"Invalid response from OpenAI API when {operation}: the reply is not a JSON object",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     if "data" not in response:
         # Wording kept from before DEC-002-8 / DEC-002-9; older tests may match it.
-        raise LLMError(f"Invalid response from OpenAI API when {operation}: {response}")
+        raise LLMError(f"Invalid response from OpenAI API when {operation}: {response}", kind="invalid_reply")
     entries = response["data"]
     if not isinstance(entries, list):
         raise LLMError(
             f"Invalid response from OpenAI API when {operation}: 'data' is not a list",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     return entries
 
@@ -128,6 +140,7 @@ def _model_entries(response: Any, operation: str) -> list[Any]:
     Raises:
         LLMError: The reply shape is wrong (see ``_reply_entries``), an entry is not a mapping, or
             an entry's ``id`` is missing, not a string or empty.
+            Every such error carries kind ``invalid_reply`` (DEC-arch-19).
     """
     entries = _reply_entries(response, operation)
     for position, entry in enumerate(entries):
@@ -135,12 +148,14 @@ def _model_entries(response: Any, operation: str) -> list[Any]:
             raise LLMError(
                 f"Invalid response from OpenAI API when {operation}: model entry {position} is not an object",
                 description=_reply_text(response),
+                kind="invalid_reply",
             )
         model_id = entry.get("id")
         if not isinstance(model_id, str) or not model_id:
             raise LLMError(
                 f"Invalid response from OpenAI API when {operation}: model entry {position} has no non-empty text id",
                 description=_reply_text(response),
+                kind="invalid_reply",
             )
     return entries
 
@@ -160,6 +175,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         LLMError: The reply shape is wrong (see ``_reply_entries``); an entry is not a mapping or
             its ``embedding`` is missing, not a list or empty; the entry count differs from
             ``count``; or all entries carry integer positions that are not exactly ``0..count-1``.
+            Every such error carries kind ``invalid_reply`` (DEC-arch-19).
     """
     operation = "embedding"
     entries = _reply_entries(response, operation)
@@ -177,11 +193,13 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         raise LLMError(
             f"Invalid response from OpenAI API when {operation}: entry {position} {problem}",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     if len(entries) != count:
         raise LLMError(
             f"Invalid response from OpenAI API when {operation}: {len(entries)} vectors returned for {count} texts",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     indices = [entry.get("index") for entry in entries]
     # DEC-002-8: positions are used only when every entry has one; a bool is an int subclass but is
@@ -192,6 +210,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         raise LLMError(
             f"Invalid response from OpenAI API when {operation}: positions are not exactly 0..{count - 1}",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     ordered: list[Any] = [None] * count
     for index, entry in zip(indices, entries):
@@ -262,19 +281,22 @@ def _responses_reply_text(response: Any, *, output_limit_set: bool = False) -> s
             ``output_limit_set`` is true and the reason is exactly ``"max_output_tokens"`` (then the
             text is returned, DEC-003-19). Any other
             or missing status extracts the text.
-            A reply that is not a mapping surfaces as a generic error.
+            A reply that is not a mapping (including a bytes body) raises with the reply as text in
+            the description. Kinds (DEC-arch-19): not a mapping -> ``invalid_reply``; failed ->
+            ``server_failed``; incomplete -> ``incomplete``.
     """
     if not isinstance(response, Mapping):
         raise LLMError(
             "Invalid response from OpenAI API when chatting: the reply is not a JSON object",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     status = response.get("status")
     if status == "failed":
         error = response.get("error")
         message = error.get("message") if isinstance(error, Mapping) else None
         reason = message if isinstance(message, str) else json.dumps(error, default=str)
-        raise LLMError("OpenAI Responses request failed", description=reason)
+        raise LLMError("OpenAI Responses request failed", description=reason, kind="server_failed")
     if status == "incomplete":
         details = response.get("incomplete_details")
         detail_reason = details.get("reason") if isinstance(details, Mapping) else None
@@ -289,7 +311,7 @@ def _responses_reply_text(response: Any, *, output_limit_set: bool = False) -> s
                 else json.dumps(details, default=str)
             )
             # DEC-003-12: any other cut-off answer is never returned as if complete.
-            raise LLMError("OpenAI Responses reply is incomplete", description=reason)
+            raise LLMError("OpenAI Responses reply is incomplete", description=reason, kind="incomplete")
 
     output = response.get("output")
     if not isinstance(output, list):
@@ -425,7 +447,9 @@ def _read_responses_tool_round(response: Any, *, output_limit_set: bool = False)
         LLMError: The reply is not a mapping, or its ``status`` is ``"failed"`` / ``"incomplete"``
             (description carries the server's reason, as in ``_responses_reply_text``) -- except an
             ``incomplete`` reply cut at the app's limit with ``output_limit_set`` on and no
-            ``function_call`` item, which is returned (DEC-004-16).
+            ``function_call`` item, which is returned (DEC-004-16). Kinds (DEC-arch-19): not a
+            mapping -> ``invalid_reply``; failed -> ``server_failed``; incomplete, including a cut at
+            the app's limit that requests a tool (DEC-arch-13) -> ``incomplete``.
     """
     # Status (and the mapping check) first, and the round text, by the very rule of the non-tool
     # path: DEC-004-8 reuses DEC-003-12, and the flag hands on the DEC-003-18 match (DEC-004-15).
@@ -449,13 +473,14 @@ def _read_responses_tool_round(response: Any, *, output_limit_set: bool = False)
                     }
                 )
             elif kind == "reasoning":
-                # Verbatim, including empty encrypted content from local servers (DEC-004-7).
-                reasoning.append(item)
+                # Verbatim, including empty encrypted content from local servers (DEC-004-7). The cast only
+                # types the decoded-JSON object (always a dict) for the carry list; nothing is copied.
+                reasoning.append(cast(dict[str, Any], item))
     # An ``incomplete`` reply only gets here when ``_responses_reply_text`` matched a cut at the app's
     # limit. DEC-004-16: its calls' arguments may be truncated, so the round is not run; the error
     # keeps the wording and reason of any other incomplete round.
     if tool_calls and response.get("status") == "incomplete":
-        raise LLMError("OpenAI Responses reply is incomplete", description="max_output_tokens")
+        raise LLMError("OpenAI Responses reply is incomplete", description="max_output_tokens", kind="incomplete")
     return _ResponsesToolRound(text=text, tool_calls=tool_calls, reasoning=reasoning)
 
 
@@ -475,14 +500,15 @@ def _offered_tool_name(call: Any, offered: set[str]) -> str:
     Raises:
         LLMError: The name is missing or empty (also for a malformed call), or it is not advertised,
             even when ``tools`` has a callable for it; the message names the tool or says it was empty.
+            ``kind="tool"`` (DEC-arch-19); the caller maps it to ``not_offered``.
     """
     function = call.get("function") if isinstance(call, Mapping) else None
     name = function.get("name") if isinstance(function, Mapping) else None
     # A malformed call is reported as an empty name rather than a raw KeyError/TypeError.
     if not name:
-        raise LLMError("The model requested a tool call with an empty tool name")
+        raise LLMError("The model requested a tool call with an empty tool name", kind="tool")
     if not isinstance(name, str) or name not in offered:
-        raise LLMError(f"The model requested tool '{name}', which was not offered")
+        raise LLMError(f"The model requested tool '{name}', which was not offered", kind="tool")
     return name
 
 
@@ -501,7 +527,8 @@ def _read_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
 
     Raises:
         LLMError: Text that is not JSON (chained from the decode error), JSON that is not an object, or
-            a value that is neither text nor a mapping; the message names the tool.
+            a value that is neither text nor a mapping; the message names the tool. ``kind="tool"``
+            (DEC-arch-19); the caller maps it to ``bad_arguments``.
     """
     # Only None and "" count as "no arguments"; other falsy values (0, [], False) are unusable
     # forms and fall through to the error below (DEC-002-4).
@@ -513,16 +540,20 @@ def _read_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
         try:
             decoded = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise LLMError(f"Arguments for tool '{name}' are not valid JSON", description=str(exc)) from exc
+            raise LLMError(
+                f"Arguments for tool '{name}' are not valid JSON", description=str(exc), kind="tool"
+            ) from exc
         if not isinstance(decoded, dict):
             raise LLMError(
                 f"Arguments for tool '{name}' are not a JSON object",
                 description=f"decoded to {type(decoded).__name__}",
+                kind="tool",
             )
         return decoded
     raise LLMError(
         f"Arguments for tool '{name}' are not readable",
         description=f"unsupported type {type(raw).__name__}",
+        kind="tool",
     )
 
 
@@ -540,7 +571,7 @@ def _tool_result_text(name: str, result: Any) -> str:
 
     Raises:
         LLMError: The ``dict`` or ``list`` cannot be serialised (chained from the error); the message
-            names the tool.
+            names the tool. ``kind="tool"`` (DEC-arch-19); the caller maps it to ``unserialisable_result``.
     """
     # Only dict/list are JSON-encoded; other values (including non-dict mappings) keep their text
     # form so an object with a custom __str__ is still sent as that text.
@@ -550,10 +581,62 @@ def _tool_result_text(name: str, result: Any) -> str:
         return json.dumps(result, ensure_ascii=False)
     except (TypeError, ValueError) as exc:
         # TypeError: a non-serialisable element; ValueError: a circular reference.
-        raise LLMError(f"Result of tool '{name}' cannot be serialised to JSON", description=str(exc)) from exc
+        raise LLMError(
+            f"Result of tool '{name}' cannot be serialised to JSON", description=str(exc), kind="tool"
+        ) from exc
 
 
-class OpenAIAPIClient(LLMClient):
+def _event_arguments_text(raw: Any) -> str:
+    """Return a call's raw arguments as the ``ToolEvent.arguments`` text (DEC-006-4).
+
+    Args:
+        raw: The call's ``arguments`` value exactly as the server sent it.
+
+    Returns:
+        A string verbatim; ``""`` for ``None``; any other value (a mapping, or anything else) as JSON
+        text with non-ASCII kept, or ``str(raw)`` when it is not JSON-serialisable.
+    """
+    if isinstance(raw, str):
+        return raw
+    if raw is None:
+        return ""
+    try:
+        return json.dumps(raw, ensure_ascii=False)
+    except (TypeError, ValueError):
+        # DEC-006-4 fallback: a value JSON cannot encode (or a circular one) is shown as its text form.
+        return str(raw)
+
+
+def _first_undeclared_argument(func: Callable[..., Any], kwargs: Mapping[str, Any]) -> str | None:
+    """Return the first argument name the callable does not declare, per DEC-arch-16.
+
+    The signature is read once. The check is skipped (``None``) when the signature cannot be read or
+    declares a ``**kwargs`` (``VAR_KEYWORD``) parameter; otherwise names are tested in ``kwargs``
+    order, which is the order the model sent them (JSON decoding and ``dict`` copies keep it).
+
+    Args:
+        func: The tool's callable.
+        kwargs: The decoded arguments the tool would be called with.
+
+    Returns:
+        The first undeclared name, or ``None`` when every name is declared or the check is skipped.
+    """
+    try:
+        parameters = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        # DEC-arch-16: an unreadable signature cannot be checked, so the tool itself decides.
+        return None
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return None
+    # Membership in the parameter table is today's rule (DEC-000-27); a positional-only name passes
+    # here and fails at the call, where it is reported as the tool's own failure.
+    for key in kwargs:
+        if key not in parameters:
+            return key
+    return None
+
+
+class OpenAIAPIClient(LLMClient[OpenAIOptions]):
     """Client for OpenAI and OpenAI-compatible servers speaking the Responses protocol.
 
     ``chat``, ``generate`` and ``chat_json`` send ``POST /responses`` (DEC-arch-1, DEC-003-11):
@@ -575,7 +658,8 @@ class OpenAIAPIClient(LLMClient):
 
     def __init__(self, model: str, base_url: str = "https://api.openai.com/v1",
                  timeout: float = 600.0, bearer_token: Optional[str] = None,
-                 default_options: Optional[OpenAIOptions] = None) -> None:
+                 default_options: Optional[OpenAIOptions] = None, *,
+                 read_timeout: float | None = None, trace: bool | None = None) -> None:
         """Build a client that authenticates with the app's credential only (DEC-001-6).
 
         Args:
@@ -585,8 +669,13 @@ class OpenAIAPIClient(LLMClient):
             bearer_token: The app's OpenAI credential, sent as ``Authorization: Bearer <token>``.
                 The environment is never consulted.
             default_options: Client-level settings, merged under per-call settings.
+            read_timeout: Silence limit in seconds for streamed requests (the per-read limit), or ``None``
+                for none; forwarded to the base (DEC-arch-20, DEC-006-5).
+            trace: Per-client trace switch (``None`` = environment decides, ``False`` = off, ``True`` = on into
+                ``LLM_TRACE_FOLDER``); forwarded to the base (DEC-arch-27, DEC-006-5).
 
         Raises:
+            ValueError: ``trace=True`` while ``LLM_TRACE_FOLDER`` is unset or empty (raised by the base).
             ValueError: ``bearer_token`` is missing or empty. The message tells the developer to
                 provide a credential, names no environment variable and contains no credential value.
         """
@@ -594,7 +683,9 @@ class OpenAIAPIClient(LLMClient):
         # environment variable, and never echoes a credential value.
         if not bearer_token:
             raise ValueError("OpenAI credential not provided. Pass the API key as the bearer_token argument.")
-        super().__init__(model, base_url, timeout, bearer_token, default_options)
+        super().__init__(
+            model, base_url, timeout, bearer_token, default_options, read_timeout=read_timeout, trace=trace
+        )
         # Per-instance record of no-counterpart settings already warned about (DEC-003-6).
         self._warned_settings: set[str] = set()
 
@@ -789,7 +880,13 @@ class OpenAIAPIClient(LLMClient):
             else:
                 # Delegated to the builder itself so caller-style turns get exactly 003's item
                 # (DEC-003-11 as corrected, DEC-004-4); the system turn is already in ``turns``.
-                items.extend(self._build_responses_payload([turn], system=None, settings={}, stream=False)["input"])
+                # The cast only types the tool loop's dict turn as the builder's message shape; the builder
+                # reads ``role`` / ``content`` alone, so the richer turn passes through unchanged.
+                items.extend(
+                    self._build_responses_payload(
+                        [cast(LLMMessage, turn)], system=None, settings={}, stream=False
+                    )["input"]
+                )
         return items
 
     async def _read_responses_stream(
@@ -851,7 +948,8 @@ class OpenAIAPIClient(LLMClient):
                 limit with ``output_limit_set`` true, DEC-003-18) or ``error`` event (carrying the
                 server's reason); when the stream ends without ``response.completed`` or such a cut
                 (also after a ``[DONE]`` sentinel; the Responses form of DEC-001-1); on reader
-                failures (DEC-001-7, raised by ``_iter_sse_data``).
+                failures (DEC-001-7, raised by ``_iter_sse_data``). Kinds (DEC-arch-19): failed or
+                error event -> ``server_failed``; incomplete event or no completion -> ``incomplete``.
             Exception: Whatever ``on_delta`` raises propagates unchanged and ends the parse; no later
                 piece is delivered (DEC-000-23).
         """
@@ -908,7 +1006,7 @@ class OpenAIAPIClient(LLMClient):
                 error = inner.get("error") if isinstance(inner, Mapping) else None
                 message = error.get("message") if isinstance(error, Mapping) else None
                 reason = message if isinstance(message, str) else json.dumps(error, default=str)
-                raise LLMError("OpenAI Responses request failed", description=reason)
+                raise LLMError("OpenAI Responses request failed", description=reason, kind="server_failed")
             elif event_type == "response.incomplete":
                 inner = event.get("response")
                 details = inner.get("incomplete_details") if isinstance(inner, Mapping) else None
@@ -927,17 +1025,17 @@ class OpenAIAPIClient(LLMClient):
                     else json.dumps(details, default=str)
                 )
                 # Same wording as the non-streamed check (DEC-003-12): any other cut-off answer is an error.
-                raise LLMError("OpenAI Responses reply is incomplete", description=reason)
+                raise LLMError("OpenAI Responses reply is incomplete", description=reason, kind="incomplete")
             elif event_type == "error":
                 message = event.get("message")
                 reason = message if isinstance(message, str) else json.dumps(event, default=str)
-                raise LLMError("The server reported an error in the stream", description=reason)
+                raise LLMError("The server reported an error in the stream", description=reason, kind="server_failed")
             # Every other event type (created, in_progress, output_item.*, content_part.*, *.done,
             # tool events) carries nothing to deliver and is ignored (DEC-003-13).
 
         # ``response.completed`` is the only completion signal; ``[DONE]`` does not count (DEC-003-13,
         # the Responses form of DEC-001-1).
-        raise LLMError("The stream ended before the reply was complete")
+        raise LLMError("The stream ended before the reply was complete", kind="incomplete")
 
     async def _read_responses_tool_stream(
         self,
@@ -1005,7 +1103,9 @@ class OpenAIAPIClient(LLMClient):
             LLMError: On a ``response.failed``, ``response.incomplete`` or ``error`` event (carrying the
                 server's reason) -- except a cut at the app's limit with no started call, which returns
                 (DEC-004-17); when the stream ends without ``response.completed`` (also after a
-                ``[DONE]`` sentinel); on reader failures raised by ``_iter_sse_data``.
+                ``[DONE]`` sentinel); on reader failures raised by ``_iter_sse_data``. Kinds
+                (DEC-arch-19): failed or error event -> ``server_failed``; incomplete event (including
+                a cut with a started call, DEC-arch-13) or no completion -> ``incomplete``.
             Exception: Whatever ``on_delta`` raises propagates unchanged and ends the parse (DEC-000-23).
         """
         text_parts: list[str] = []
@@ -1145,7 +1245,8 @@ class OpenAIAPIClient(LLMClient):
                     _finish_call(_call_for(item.get("id"), event.get("output_index")), item)
                 elif kind == "reasoning":
                     # Verbatim from its done event, the one source of carry items (DEC-004-7, DEC-004-9).
-                    carried.append((event.get("output_index"), len(carried), item))
+                    # The cast only types the decoded-JSON object (always a dict); it is kept as received.
+                    carried.append((event.get("output_index"), len(carried), cast(dict[str, Any], item)))
             elif event_type == "response.completed":
                 # Completion is final: anything the server sends after it is never read.
                 return await _end_round()
@@ -1154,7 +1255,7 @@ class OpenAIAPIClient(LLMClient):
                 error = inner.get("error") if isinstance(inner, Mapping) else None
                 message = error.get("message") if isinstance(error, Mapping) else None
                 reason = message if isinstance(message, str) else json.dumps(error, default=str)
-                raise LLMError("OpenAI Responses request failed", description=reason)
+                raise LLMError("OpenAI Responses request failed", description=reason, kind="server_failed")
             elif event_type == "response.incomplete":
                 inner = event.get("response")
                 details = inner.get("incomplete_details") if isinstance(inner, Mapping) else None
@@ -1177,17 +1278,17 @@ class OpenAIAPIClient(LLMClient):
                     if isinstance(detail_reason, str) and detail_reason
                     else json.dumps(details, default=str)
                 )
-                raise LLMError("OpenAI Responses reply is incomplete", description=reason)
+                raise LLMError("OpenAI Responses reply is incomplete", description=reason, kind="incomplete")
             elif event_type == "error":
                 message = event.get("message")
                 reason = message if isinstance(message, str) else json.dumps(event, default=str)
-                raise LLMError("The server reported an error in the stream", description=reason)
+                raise LLMError("The server reported an error in the stream", description=reason, kind="server_failed")
             # Every other event type (created, in_progress, content_part.*, other *.done) carries
             # nothing for the round and is ignored (DEC-004-9).
 
         # ``response.completed`` is the only completion signal; ``[DONE]`` does not count (DEC-004-9).
         # Raised before any tool of the round runs, since the caller only runs tools after a return.
-        raise LLMError("The stream ended before the reply was complete")
+        raise LLMError("The stream ended before the reply was complete", kind="incomplete")
 
     async def list_models(self) -> List[str]:
         """Return the ids of the models the server offers, in the server's order.
@@ -1382,7 +1483,8 @@ class OpenAIAPIClient(LLMClient):
             LLMError: Request failure; a failed / incomplete reply other than a cut at the app's own
                 limit (DEC-003-12, DEC-arch-13); or
                 ``response_schema`` given and the reply is not valid JSON ("LLM response was not
-                valid JSON, despite requesting JSON mode.", parse error in the description).
+                valid JSON, despite requesting JSON mode.", parse error in the description; kind
+                ``invalid_reply``, DEC-arch-19).
         """
         settings = self._merge_options(options=options)
         # DEC-003-10 / DEC-001-2: the JSON-object format is the fallback only; an app-set
@@ -1410,14 +1512,15 @@ class OpenAIAPIClient(LLMClient):
             except (json.JSONDecodeError, TypeError) as e:
                 raise LLMError(
                     "LLM response was not valid JSON, despite requesting JSON mode.",
-                    description=str(e)
+                    description=str(e),
+                    kind="invalid_reply",
                 )
 
         return response_content
 
     async def chat_with_tools(
         self,
-        messages: List[Dict[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         *,
         tools_definitions: List[Dict[str, Any]],
         tools: Dict[str, Callable[..., Any]],
@@ -1427,6 +1530,8 @@ class OpenAIAPIClient(LLMClient):
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        tool_errors: Literal["raise", "result"] = "result",
+        on_tool_event: Optional[Callable[[ToolEvent], Awaitable[None] | None]] = None,
     ) -> str:
         """Run a tool conversation over ``POST /responses`` and return the final answer text.
 
@@ -1437,9 +1542,11 @@ class OpenAIAPIClient(LLMClient):
         through ``_request`` with the body keys of DEC-003-11 plus the flattened ``tools`` (DEC-004-5,
         DEC-004-10), ``stream`` false; ``response_format`` wins over the setting and is sent as
         ``text: {"format": ...}`` on every round. A round without function calls returns its text.
-        Otherwise each call runs in order (offered check, argument reading, argument-name check, call
-        and await, result as text), the assistant tool-call turn and tool-result turns are appended to
-        the internal copy, and the round's reasoning items are carried to later rounds ahead of that
+        Otherwise each call runs in order through the per-call procedure (``_execute_tool_call``:
+        observer ``start`` event, offered check, argument reading, argument-name check, call and await,
+        result as text, observer ``result`` / ``error`` event), the assistant tool-call turn and one
+        tool-result turn per call are appended to the internal copy, and the round's reasoning items
+        are carried to later rounds ahead of that
         turn's function calls (DEC-004-7). The caller's ``messages`` and ``tools_definitions`` are never
         modified; reasoning never reaches the answer or the caller's messages. Trace: one
         ``chat_with_tools`` session, each round's request logged on ``"/responses (loop <n>)"`` (n from
@@ -1447,8 +1554,10 @@ class OpenAIAPIClient(LLMClient):
 
         With ``stream=True`` each round sends the same body with ``stream`` true, opened through
         ``_stream_post("/responses", ...)`` and read by ``_read_responses_tool_stream`` (DEC-004-9): the
-        receiver gets every round's text pieces and that round's reasoning as its own closed
-        ``<think>`` block, never tool-call text, and is called without the trace wrapper (DEC-004-10).
+        receiver gets every round's text pieces and that round's reasoning incrementally: ``<think>``
+        is put before the round's first reasoning piece, and ``</think>`` before the round's first text
+        piece, or sent as its own piece when the round completes without text; never tool-call text.
+        It is called without the trace wrapper (DEC-004-10).
         The rest of the loop is the non-streamed one. The return is the final round's text only, with
         no reasoning and no markers.
 
@@ -1462,20 +1571,56 @@ class OpenAIAPIClient(LLMClient):
         of them; tools of earlier rounds stay run (DEC-004-18). With no app limit, and for every other
         early end, a cut round still raises.
 
+        Tool-call failures (``interfaces.md`` § Tool failures; DEC-arch-14, DEC-arch-28): the five
+        failure kinds are a tool not offered (or an empty name), arguments that are not a JSON object,
+        an argument name the callable does not declare (checked only when its signature is readable
+        and has no ``**kwargs`` parameter, DEC-arch-16), a tool that raises an ordinary exception, and
+        a result that cannot be turned into text. Cancellation and other non-ordinary exceptions from
+        a tool propagate unchanged in both modes.
+
+        Args:
+            messages: The conversation; copied, never modified.
+            tools_definitions: Advertised tools (nested or flat definitions); never modified.
+            tools: Callables by tool name (plain or coroutine functions).
+            system: Optional system text put at the head of the internal copy.
+            max_loops: Round limit.
+            options: Call-time settings, merged over the constructor defaults.
+            stream: Stream each round through ``_stream_post``.
+            on_delta: Streamed text / reasoning receiver (awaited).
+            response_format: Output format sent as ``text: {"format": ...}`` on every round.
+            tool_errors: ``"result"`` (default, tolerant): a failing call's function-call output carries
+                the model-facing text for its kind, the trace gets ``TOOL RESULT`` + ``TOOL ERROR``
+                (DEC-006-7) and the loop goes on with the next call. ``"raise"`` (strict): the call ends
+                with the exception listed under Raises. Only ``"raise"`` selects strict handling; any
+                other value behaves as ``"result"`` (DEC-006-9).
+            on_tool_event: Optional observer receiving one ``ToolEvent`` per event, a plain function or
+                one returning an awaitable (awaited inline before the loop goes on, DEC-arch-18): per
+                call a ``start`` event before the tool runs, then one ``result`` (``output`` = the text
+                sent to the model) or ``error`` (``error_kind`` set) event. Strict: the ``error`` event
+                is sent before the exception (DEC-arch-17) and an observer exception propagates
+                unchanged. Tolerant: an observer exception ends that call's events (DEC-arch-26), the
+                tool is not run if it failed on ``start``, the model is told ``Tool '<n>' failed.``
+                (DEC-006-8), ``LLMToolObserverWarning`` is emitted once and the failure is traced.
+
         Returns:
             The final round's text.
 
         Raises:
-            ValueError: An advertised tool has no callable (before any request), or a call names an
-                argument the callable lacks.
-            LLMError: A call names a tool not advertised or an empty name, its arguments are not a
-                JSON object, a tool result cannot be serialised, a round reply is failed / incomplete
+            ValueError: An advertised tool has no callable (before any request); strict only, a call
+                names an argument the callable lacks.
+            LLMError: Strict only (``kind="tool"``): a call names a tool not advertised or an empty
+                name, its arguments are not a JSON object, a tool result cannot be serialised. Both
+                modes: a round reply is failed / incomplete
                 (except a cut at the app's limit without tool calls, DEC-004-16 / DEC-004-17), a
                 streamed round reports a failure / error event or ends without completion, or a
                 request fails (non-2xx, transport).
             Exception: Streamed, whatever ``on_delta`` raises propagates unchanged (DEC-000-23).
-            RuntimeError: A tool raised (naming the tool), or the round limit was reached without a
-                final answer (text contains ``max_loops`` and its value; raised after the trace).
+            RuntimeError: Strict only, a tool raised (naming the tool, chained from its exception);
+                both modes, the round limit was reached without a final answer (text contains
+                ``max_loops`` and its value; raised after the trace).
+            Exception: Strict only, whatever ``on_tool_event`` raises propagates unchanged.
+            BaseException: Cancellation (and other non-ordinary exceptions) raised by a tool propagates
+                unchanged in both modes.
         """
         # Pre-flight before the merge and before any request (DEC-004-11, DEC-004-5).
         advertised = _advertised_tool_names(tools_definitions)
@@ -1494,7 +1639,9 @@ class OpenAIAPIClient(LLMClient):
         # read after the merge so defaults, the alias and per-call ``None`` clearing all count.
         output_limit_set = "max_output_tokens" in settings
 
-        msgs: list[dict[str, Any]] = list(messages)
+        # DEC-006-2 / Step 002 DoD-3: the loop's own list of dict turns; the caller's read-only sequence
+        # (a tuple is fine) and its mappings are never modified.
+        msgs: list[dict[str, Any]] = [dict(m) for m in messages]
         if system:
             msgs.insert(0, {"role": "system", "content": system})
         # Call-local carry record (DEC-004-7): position of an assistant tool-call turn in ``msgs`` ->
@@ -1540,29 +1687,230 @@ class OpenAIAPIClient(LLMClient):
                     reasoning[turn_index] = round_.reasoning
 
                 for call in round_.tool_calls:
-                    # 002's order: offered check, then argument reading, both before the tool can
-                    # run; calls earlier in this reply have already run and keep their effects.
-                    name = _offered_tool_name(call, advertised)
-                    func = tools[name]
-                    kwargs = _read_tool_arguments(name, call["function"].get("arguments"))
-                    t.log_tool_call(name, kwargs)
-                    if not all(k in inspect.signature(func).parameters for k in kwargs):
-                        raise ValueError(f"Bad args for tool '{name}': {kwargs}")
-                    try:
-                        result = func(**kwargs)
-                        if inspect.isawaitable(result):
-                            result = await result
-                    except Exception as exc:
-                        raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
-
-                    # Outside the try above, so a conversion failure stays LLMError and is not
-                    # reported as the tool's own failure (DEC-002-5).
-                    content = _tool_result_text(name, result)
-                    t.log_tool_result(name, content)
+                    # Sequential, in the order requested; shared by streamed and non-streamed rounds.
+                    # A tolerated failure appends the same tool turn as a success, carrying the
+                    # model-facing text, so it becomes this call's function-call output next round.
+                    content = await self._execute_tool_call(
+                        call,
+                        advertised=advertised,
+                        tools=tools,
+                        strict=tool_errors == "raise",  # DEC-006-9: only "raise" selects strict
+                        on_tool_event=on_tool_event,
+                        t=t,
+                    )
                     msgs.append({"role": "tool", "content": content, "tool_call_id": call.get("id")})
 
         # DEC-002-2: stays RuntimeError and outside the trace session; the text keeps `max_loops`.
         raise RuntimeError(f"Tool loop reached its round limit (max_loops={max_loops}) without a final answer")
+
+    async def _execute_tool_call(
+        self,
+        call: Any,
+        *,
+        advertised: set[str],
+        tools: Dict[str, Callable[..., Any]],
+        strict: bool,
+        on_tool_event: Optional[Callable[[ToolEvent], Awaitable[None] | None]],
+        t: TraceSession,
+    ) -> str:
+        """Run the per-call procedure for one requested tool call and return its function-call output text.
+
+        This class's own copy of the procedure (DEC-arch-15; feature 006 ``context.md`` § Per-call
+        procedure), shared by streamed and non-streamed rounds. In order: build the event identity
+        (requested ``name``, possibly empty; ``call_id`` from the call record's ``id``; raw arguments,
+        a mapping JSON-encoded and missing as ``""``, DEC-006-4); observer ``start`` event; offered
+        check (``not_offered``); argument reading (``bad_arguments``); argument-name check per
+        DEC-arch-16, signature read once, skipped for a ``**kwargs`` parameter or an unreadable
+        signature, reporting the first undeclared name in the model's order (``unknown_argument``);
+        trace ``TOOL CALL``; run and await the tool (``tool_raised``); result as text
+        (``unserialisable_result``); observer ``result`` event with ``output`` = that text; trace
+        ``TOOL RESULT``. The caller appends the returned text as the call's tool-result turn.
+
+        Args:
+            call: One entry of ``_ResponsesToolRound.tool_calls`` (``{"id": ..., "function": {"name":
+                ..., "arguments": ...}}``; may be malformed).
+            advertised: Names advertised in ``tools_definitions`` (``_advertised_tool_names``).
+            tools: Callables by tool name.
+            strict: ``True`` when the caller passed ``tool_errors="raise"`` (DEC-006-9).
+            on_tool_event: The observer, or ``None``; its return is awaited when awaitable (DEC-arch-18).
+            t: The ``chat_with_tools`` trace session.
+
+        Returns:
+            Success: the tool's result text. Tolerant failure: the model-facing text for the failure
+            kind (DEC-arch-14), after an ``error`` event and trace ``TOOL RESULT`` + ``TOOL ERROR``
+            (DEC-006-7). Tolerant observer failure: ``Tool '<n>' failed.`` (DEC-006-8), after one
+            ``LLMToolObserverWarning`` and the trace note, with no further event for this call
+            (DEC-arch-26).
+
+        Raises:
+            LLMError: Strict, ``not_offered`` / ``bad_arguments`` / ``unserialisable_result``, today's
+                text with ``kind="tool"`` (after the ``error`` event, DEC-arch-17).
+            ValueError: Strict, ``unknown_argument`` (after the ``error`` event).
+            RuntimeError: Strict, ``tool_raised``, naming the tool, chained from the tool's exception
+                (after the ``error`` event).
+            Exception: Strict, whatever the observer raises, unchanged (the tool does not run if it
+                failed on ``start``).
+            BaseException: Cancellation and other non-ordinary exceptions from the tool, in both modes,
+                with no event and no result.
+        """
+        function = call.get("function") if isinstance(call, Mapping) else None
+        raw_name = function.get("name") if isinstance(function, Mapping) else None
+        raw_arguments = function.get("arguments") if isinstance(function, Mapping) else None
+        raw_id = call.get("id") if isinstance(call, Mapping) else None
+        # Event identity (DEC-006-4): the requested name as sent (missing -> "", a non-text value as its
+        # text form), the Responses call id only when it is a non-empty string, raw arguments as text.
+        # The same name is ``<n>`` in every model-facing text (DEC-arch-14).
+        event_name = raw_name if isinstance(raw_name, str) else ("" if raw_name is None else str(raw_name))
+        call_id = raw_id if isinstance(raw_id, str) and raw_id else None
+        arguments_text = _event_arguments_text(raw_arguments)
+        failed_text = f"Tool '{event_name}' failed."
+        call_logged = False
+
+        def log_call(arguments: Any) -> None:
+            """Write this call's single ``TOOL CALL`` entry once (DEC-006-7): parsed arguments when read,
+            otherwise the raw argument text."""
+            nonlocal call_logged
+            if not call_logged:
+                t.log_tool_call(event_name, arguments)
+                call_logged = True
+
+        async def notify(
+            event_type: Literal["start", "result", "error"],
+            *,
+            output: str | None = None,
+            error_kind: ToolErrorKind | None = None,
+        ) -> bool:
+            """Send one event to the observer, inline and awaited when awaitable (DEC-arch-18, DEC-000-23).
+
+            Returns ``True`` when the observer failed in tolerant mode; that failure is already handled
+            here (one ``LLMToolObserverWarning``, trace entries, DEC-006-7 / DEC-006-8) and the caller
+            must return ``failed_text`` without sending any further event for this call (DEC-arch-26).
+            Returns ``False`` when there is no observer or it finished normally. Strict mode: the
+            observer's ordinary exception propagates unchanged. A non-ordinary exception (cancellation)
+            always propagates.
+            """
+            if on_tool_event is None:
+                return False
+            event: ToolEvent = {
+                "type": event_type,
+                "name": event_name,
+                "call_id": call_id,
+                "arguments": arguments_text,
+                "output": output,
+                "error_kind": error_kind,
+            }
+            try:
+                outcome = on_tool_event(event)
+                if inspect.isawaitable(outcome):
+                    await outcome
+            except Exception as exc:
+                if strict:
+                    raise
+                observer_error = exc
+            else:
+                return False
+            # Tolerant observer failure: handled outside the except block so later trace writes and the
+            # warning carry no implicit exception context.
+            description = f"{type(observer_error).__name__}: {observer_error}"
+            warnings.warn(
+                f"Tool-event observer failed on the '{event_type}' event of tool '{event_name}': {description}",
+                LLMToolObserverWarning,
+                # notify -> _execute_tool_call -> chat_with_tools -> the app's call site.
+                stacklevel=4,
+            )
+            log_call(arguments_text)
+            t.log_tool_result(event_name, failed_text)
+            t.log_tool_error(event_name, f"observer failed: {description}")
+            return True
+
+        async def fail(
+            kind: ToolErrorKind, model_text: str, strict_error: Exception, cause: Exception | None = None
+        ) -> str:
+            """Handle one tool failure of ``kind``: ``error`` event first, then raise or tolerate.
+
+            Strict (DEC-arch-17): raise ``strict_error`` -- today's exception and text -- chained from
+            ``cause`` when given (a helper's ``LLMError`` keeps its own chaining). Tolerant: trace
+            ``TOOL RESULT`` with ``model_text`` then ``TOOL ERROR`` with the kind name (DEC-006-7) and
+            return ``model_text``. An observer failure on the ``error`` event replaces both outcomes
+            (strict: propagates from ``notify``; tolerant: ``failed_text``, DEC-006-8).
+            """
+            log_call(arguments_text)
+            if await notify("error", error_kind=kind):
+                return failed_text
+            if strict:
+                if cause is not None:
+                    raise strict_error from cause
+                raise strict_error
+            t.log_tool_result(event_name, model_text)
+            t.log_tool_error(event_name, kind)
+            return model_text
+
+        # Each check below records its failure first and handles it after leaving the ``except`` block,
+        # so the strict re-raise and any observer exception are not implicitly chained to it.
+        if await notify("start"):
+            # Observer failed on ``start`` (tolerant): the tool is not run (DEC-arch-26).
+            return failed_text
+
+        offered_error: LLMError | None = None
+        name = event_name
+        try:
+            name = _offered_tool_name(call, advertised)
+        except LLMError as exc:
+            offered_error = exc
+        if offered_error is not None:
+            return await fail("not_offered", f"Tool '{event_name}' is not available.", offered_error)
+
+        func = tools[name]  # pre-flight guarantees every advertised name has a callable
+        arguments_error: LLMError | None = None
+        kwargs: dict[str, Any] = {}
+        try:
+            kwargs = _read_tool_arguments(name, raw_arguments)
+        except LLMError as exc:
+            arguments_error = exc
+        if arguments_error is not None:
+            return await fail("bad_arguments", f"Invalid arguments for tool '{name}'.", arguments_error)
+
+        # Today's trace position: after the arguments are read, before the name check (DEC-006-7).
+        log_call(kwargs)
+        undeclared = _first_undeclared_argument(func, kwargs)
+        if undeclared is not None:
+            return await fail(
+                "unknown_argument",
+                f"Tool '{name}' has no argument '{undeclared}'.",
+                ValueError(f"Bad args for tool '{name}': {kwargs}"),
+            )
+
+        tool_error: Exception | None = None
+        result: Any = None
+        try:
+            result = func(**kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            # Only ordinary exceptions are tool failures; cancellation and other BaseExceptions
+            # propagate with no event and no output (interfaces.md § Tool failures).
+            tool_error = exc
+        if tool_error is not None:
+            return await fail(
+                "tool_raised", failed_text, RuntimeError(f"Tool '{name}' failed: {tool_error}"), cause=tool_error
+            )
+
+        # Outside the tool's try above, so a conversion failure stays its own kind (DEC-002-5). Any
+        # ordinary exception counts (e.g. a failing ``__str__``); strict re-raises it unchanged.
+        conversion_error: Exception | None = None
+        content = ""
+        try:
+            content = _tool_result_text(name, result)
+        except Exception as exc:
+            conversion_error = exc
+        if conversion_error is not None:
+            return await fail("unserialisable_result", failed_text, conversion_error)
+
+        if await notify("result", output=content):
+            # DEC-006-8: the result already produced is discarded; the model is told the tool failed.
+            return failed_text
+        t.log_tool_result(name, content)
+        return content
 
     async def embed_batch(
         self,

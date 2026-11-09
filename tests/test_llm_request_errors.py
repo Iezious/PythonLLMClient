@@ -9,9 +9,16 @@ its ``request`` / ``post`` hand back an async context manager that either raises
 yields a fake response. DoD-11 (the existing unit suite passes unchanged) is covered by the existing files
 ``tests/test_llm_embeddings.py``, ``tests/test_get_models.py``, ``tests/test_llm_tools_streaming.py`` and
 ``tests/test_llm_tools_reasoning_stream.py``; no new test is written for it.
+
+Feature 006 step 003 (DEC-arch-19, DEC-001-7) adds, at the end of the file, the error ``kind`` and ``status`` the
+base's request plumbing gives every ``LLMError``: ``status`` with the HTTP status for a non-2xx reply on the plain and
+the streamed path (step DoD-1, DoD-2), ``connection`` / ``timeout`` / ``interrupted`` for transport failures with the
+text unchanged (step DoD-3), and ``invalid_reply`` for an empty result of the base ``embed`` (step DoD-5). Those tests
+carry the suffix ``__s003_DoD<n>`` so they are not confused with the feature-001 ``__dod<n>`` ids above.
 """
 
 import re
+import socket
 from typing import Any
 
 import aiohttp
@@ -511,3 +518,212 @@ async def test_ollama_embed_batch_404_still_falls_back__dod10(monkeypatch):
     paths = [url for _method, url, _kw in session.calls]
     assert paths == [f"{OLLAMA_URL}/api/embed", f"{OLLAMA_URL}/api/embeddings", f"{OLLAMA_URL}/api/embeddings"]
     assert vectors == [[1.0], [2.0]]
+
+
+# === Feature 006 step 003: error kind and status from the base plumbing (DEC-arch-19) ===========================
+
+
+# Transport failures raised while opening a request, with the text kind DEC-001-7 fixes for each
+# (``Request to <url> failed: <text kind>``) and the error kind DEC-arch-19 maps that text kind to.
+# A disconnect counts as an interrupted transfer; a timeout is recognised before any other client error, so
+# aiohttp's ``ServerTimeoutError`` (also a connection error) is a timeout.
+def _kinded_open_failures() -> list[Any]:
+    return [
+        pytest.param(
+            aiohttp.ClientConnectionError("Cannot connect to host llm.test:9292"),
+            "connection failure",
+            "connection",
+            id="connection-refused",
+        ),
+        pytest.param(aiohttp.ServerDisconnectedError(), "interrupted transfer", "interrupted", id="disconnect"),
+        pytest.param(TimeoutError(), "timeout", "timeout", id="timeout"),
+        pytest.param(
+            aiohttp.ServerTimeoutError("Timeout on reading data from socket"), "timeout", "timeout", id="server-timeout"
+        ),
+    ]
+
+
+# Failures while reading a 2xx body that was already opened: a cut transfer and a timeout.
+def _kinded_body_failures() -> list[Any]:
+    return [
+        pytest.param(
+            aiohttp.ClientPayloadError("Response payload is not completed"),
+            "interrupted transfer",
+            "interrupted",
+            id="payload-error",
+        ),
+        pytest.param(aiohttp.ServerDisconnectedError(), "interrupted transfer", "interrupted", id="disconnect"),
+        pytest.param(TimeoutError(), "timeout", "timeout", id="timeout"),
+    ]
+
+
+def _closed_local_port() -> int:
+    """A loopback port nothing listens on: bound to get a free number, then closed, so a connect is refused."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+# --- step DoD-1: non-2xx on a non-streamed request ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 401, 404, 500, 503])
+async def test_request_non_2xx_has_status_kind_and_http_status__s003_DoD1(monkeypatch, status):
+    """Step 003 DoD-1: a non-2xx ``_request`` reply raises ``LLMError`` with kind ``status`` and the HTTP status."""
+    client = _client()
+    reply = f"server says no ({status})"
+    _install(client, lambda method, u: _FakeResponse(u, status=status, body=reply, content_type="text/plain"))
+
+    with pytest.raises(LLMError) as exc_info:
+        await client._request("POST", "/chat/completions", json={"model": "test-model"})
+
+    err = exc_info.value
+    assert err.kind == "status"
+    assert err.status == status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [404, 500])
+async def test_request_non_2xx_text_is_as_before__s003_DoD1(monkeypatch, status):
+    """Step 003 DoD-1: the non-2xx text is unchanged: "Request to <url> failed with status <n>" plus the reply."""
+    client = _client()
+    reply = f"server says no ({status})"
+    _install(client, lambda method, u: _FakeResponse(u, status=status, body=reply, content_type="text/plain"))
+
+    with pytest.raises(LLMError) as exc_info:
+        await client._request("GET", "/models")
+
+    err = exc_info.value
+    expected_message = f"Request to {BASE_URL}/models failed with status {status}"
+    assert err.message == expected_message
+    assert err.description == reply
+    assert str(err) == f"{expected_message}: {reply}"
+
+
+# --- step DoD-2: non-2xx on a streamed request -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 401, 429, 503])
+async def test_stream_post_non_2xx_has_status_kind_and_http_status__s003_DoD2(monkeypatch, status):
+    """Step 003 DoD-2: a refused stream raises kind ``status`` and the HTTP status; text keeps address and reply."""
+    client = _client(TOKEN)
+    reply = '{"error": {"message": "model not loaded"}}'
+    _install(client, lambda method, u: _FakeResponse(u, status=status, body=reply, content_type="application/json"))
+
+    with pytest.raises(LLMError) as exc_info:
+        async with client._stream_post("/chat/completions", {"model": "test-model", "stream": True}):
+            pytest.fail("the block must not run for a non-2xx reply")
+
+    err = exc_info.value
+    assert err.kind == "status"
+    assert err.status == status
+    text = str(err)
+    assert f"{BASE_URL}/chat/completions" in text
+    assert reply in text
+    for t in _texts(err):
+        assert TOKEN not in t
+
+
+# --- step DoD-3: transport failures carry connection / timeout / interrupted ------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "text_kind", "kind"), _kinded_open_failures())
+async def test_request_open_failure_kind_and_text__s003_DoD3(monkeypatch, error, text_kind, kind):
+    """Step 003 DoD-3: a failure opening ``_request`` has the matching kind, text "Request to <url> failed: <k>"."""
+    client = _client()
+    _install(client, lambda method, url: error)
+
+    with pytest.raises(LLMError) as exc_info:
+        await client._request("POST", "/chat/completions", json={"model": "test-model"})
+
+    err = exc_info.value
+    assert err.kind == kind
+    assert err.message == f"Request to {BASE_URL}/chat/completions failed: {text_kind}"
+    assert err.status is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "text_kind", "kind"), _kinded_body_failures())
+async def test_request_body_read_failure_kind_and_text__s003_DoD3(monkeypatch, error, text_kind, kind):
+    """Step 003 DoD-3: a cut transfer or timeout reading a 2xx ``_request`` body has the matching kind and text."""
+    client = _client()
+    _install(client, lambda method, u: _FakeResponse(u, status=200, body_error=error))
+
+    with pytest.raises(LLMError) as exc_info:
+        await client._request("GET", "/models")
+
+    err = exc_info.value
+    assert err.kind == kind
+    assert err.message == f"Request to {BASE_URL}/models failed: {text_kind}"
+    assert err.status is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "text_kind", "kind"), _kinded_open_failures())
+async def test_stream_post_open_failure_kind_and_text__s003_DoD3(monkeypatch, error, text_kind, kind):
+    """Step 003 DoD-3: a failure opening ``_stream_post`` has the matching kind and the unchanged text."""
+    client = _client()
+    _install(client, lambda method, url: error)
+
+    with pytest.raises(LLMError) as exc_info:
+        async with client._stream_post("/chat/completions", {"model": "test-model", "stream": True}):
+            pytest.fail("the block must not run when the request cannot be opened")
+
+    err = exc_info.value
+    assert err.kind == kind
+    assert err.message == f"Request to {BASE_URL}/chat/completions failed: {text_kind}"
+    assert err.status is None
+
+
+@pytest.mark.asyncio
+async def test_request_refused_local_port_is_connection_kind__s003_DoD3():
+    """Step 003 DoD-3: a real refused connection (closed loopback port) on ``_request`` has kind ``connection``."""
+    base_url = f"http://127.0.0.1:{_closed_local_port()}/v1"
+    client = LLMClient("test-model", base_url, 5.0)
+
+    async with client:
+        with pytest.raises(LLMError) as exc_info:
+            await client._request("GET", "/models")
+
+    err = exc_info.value
+    assert err.kind == "connection"
+    assert err.message == f"Request to {base_url}/models failed: connection failure"
+
+
+@pytest.mark.asyncio
+async def test_stream_post_refused_local_port_is_connection_kind__s003_DoD3():
+    """Step 003 DoD-3: a real refused connection on ``_stream_post`` has kind ``connection`` and the same text."""
+    base_url = f"http://127.0.0.1:{_closed_local_port()}/v1"
+    client = LLMClient("test-model", base_url, 5.0)
+
+    async with client:
+        with pytest.raises(LLMError) as exc_info:
+            async with client._stream_post("/chat/completions", {"model": "test-model", "stream": True}):
+                pytest.fail("the block must not run when the request cannot be opened")
+
+    err = exc_info.value
+    assert err.kind == "connection"
+    assert err.message == f"Request to {base_url}/chat/completions failed: connection failure"
+
+
+# --- step DoD-5: empty result from the base embed -----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_base_embed_empty_result_is_invalid_reply__s003_DoD5(monkeypatch):
+    """Step 003 DoD-5: base ``embed`` whose batch yields no vector raises ``LLMError`` with kind ``invalid_reply``."""
+    client = _client()
+
+    # Fake the batch call the base ``embed`` relies on: the server answered with no embedding at all.
+    async def empty_batch(texts, *args, **kwargs):
+        return []
+
+    monkeypatch.setattr(client, "embed_batch", empty_batch)
+
+    with pytest.raises(LLMError) as exc_info:
+        await client.embed("hello")
+
+    assert exc_info.value.kind == "invalid_reply"

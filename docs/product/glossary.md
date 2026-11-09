@@ -45,5 +45,11 @@
 - **chat completions** — the chat protocol kept for compatibility with servers that do not offer Responses.
 - **reasoning summary** — OpenAI's summary of its hidden reasoning.
 - **output length limit** — the most text the app lets the model produce for one reply; reaching it ends the reply early, which is a normal result.
+- **tool-call failure** — one of: an unoffered tool asked for, unreadable arguments, an argument the tool lacks, the tool failing, a result that cannot be made into text.
+- **strict / tolerant handling** — the app's choice for a tool conversation: a tool-call failure is told to the model and the conversation continues (tolerant, the default), or ends the call (strict, chosen by the app).
+- **tool-call observer** — an optional app function told when each tool call starts and how it ended, in call order.
+- **call id** — the server's own identifier for one tool call.
+- **silence limit** — the longest a streamed reply may go without sending anything before the call ends.
+- **failure kind** — what the library's error says about the sort of failure, readable without its message.
 </auto-generated>
 <!-- product-spec:end -->

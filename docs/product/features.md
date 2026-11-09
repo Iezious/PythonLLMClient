@@ -14,9 +14,10 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Ollama as a backend choice is deprecated.
   - One client may serve several calls at the same time.
   - The time limit set when building the client applies to each request to the server, including a whole streamed reply; there is no per-call limit.
+  - The app may also set, when building the client, a limit on how long a streamed reply may stay silent; a stream silent longer than that ends with the library's time-limit error, while a reply that keeps producing may run up to the whole-request limit. Like the time limit, it is set per client, not per call.
   - A client built directly without an address uses the backend's usual address; the library's single entry point always requires an address.
 - **Delivered:** legacy; 001.core-fixes (2026-11-07)
-- **Realized by:** UC-001; US-001, US-002, US-003, US-004, US-005, US-029, US-047
+- **Realized by:** UC-001; US-001, US-002, US-003, US-004, US-005, US-029, US-047, US-067, US-068
 - **Gap:**
   - _TBD: choosing the deprecated Ollama backend should tell the developer it is deprecated — not yet supported_
   - _TBD: a client used without a usage scope should also release its connection to the server — not yet supported (today only closing the usage scope releases it)_
@@ -30,6 +31,7 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Ollama deprecated: `[confirmed: user]` interview "2026-11-07 — Vision discussion"
   - Registry framing (apps keep their own registry, pick one per conversation): `[example evidence]` interview "2026-11-07 — Consumer-example round"
   - base requirement: product scout finding F1
+  - Silence limit rule: `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
 
 ### FEAT-002 — Chat with a model
 - **Purpose:** Send a conversation, optionally preceded by a system instruction, and get the reply text. · **Actors:** ACT-001, ACT-002 · **Priority:** must
@@ -128,20 +130,28 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 - **Rule:**
   - Every offered tool must have a function; this is checked before the server is contacted.
   - Requested tools run one after another, in the order asked.
-  - A failing tool, or an argument the tool does not have, ends the whole call; the model is not told.
+  - A tool-call failure is one of: the model asks for a tool that was not offered (or for no name); the model's arguments cannot be read as named values; the model passes an argument the tool does not have; the tool fails; the tool's result cannot be made into text.
+  - By default (tolerant handling) a tool-call failure is told to the model and the conversation continues (see below). The app may choose strict handling for a tool conversation: a tool-call failure then ends the whole call and the model is not told.
+  - Under tolerant handling: the failing call's tool is not run (or its failure is caught), the model is told in a short description, and the conversation continues; other calls in the same round still run, in order. The description names the failure kind and the tool, and may repeat what the model itself sent wrong (e.g. the unknown argument name); it never carries the tool's own failure text.
+  - Cancelling a tool conversation is never turned into a tool result, in either mode.
+  - The app may give an observer that is told, in call order, when each tool call starts (tool name, the server's id for the call, the arguments exactly as the model sent them), and then its result or its failure (with the failure kind). The observer may be plain or awaitable.
+  - If the observer fails: under strict handling the call ends with that failure; under tolerant handling the model is told that tool failed (a tool not yet run is not run), the conversation continues, and the observer's failure is raised as a warning the app can filter and written to the trace record when tracing is on.
+  - A tool function that accepts any argument names runs with whatever arguments the model passes.
+  - The tolerant and strict choice and the observer are available on OpenAI and llama-swap, on both chat protocols. The deprecated Ollama offers no choice (keeps its old behaviour) and refuses an explicit choice or an observer, naming the reason.
   - A tool conversation has a per-call round limit as a safety guard.
   - A requested answer format applies to every round of the conversation.
   - The final answer is not checked against the requested format (accepted).
   - "Offered" means described to the model; a function supplied without being described is not offered.
 - **Delivered:** legacy; 002.edge-fixes (2026-11-07); Responses protocol: 004.responses-tools (2026-11-08)
-- **Realized by:** UC-007; US-023, US-027, US-030, US-031, US-032, US-033, US-034, US-035, US-037, US-058
+- **Realized by:** UC-007; US-023, US-027, US-030, US-031, US-032, US-033, US-034, US-035, US-037, US-058, US-064, US-065, US-066
 - **Gap:**
-  - _TBD: the app can observe each tool call and its result as it happens — not yet supported_
   - _TBD: the deprecated Ollama client keeps its old behaviour for unoffered tools, unreadable arguments and unserialisable results (defect, observation-only)_
 - **Source:**
   - `[confirmed: user]` interview "2026-11-07 — Vision discussion" (signal 3); "2026-11-07 — Consumer-example round"
   - Rules (failing tool ends the call, round limit as safety guard, format on every round, final answer not validated) and defect gaps: `[confirmed: user]` interview "Wave 4 — FEAT-007 tools + stream parsing (batched)" (2026-11-07)
   - Rules (function checked up front, tools run in order): behaviour per deep-docs notes I-07
+  - Tool-call failure kinds, strict/tolerant handling, observer, any-argument tools, availability, observer-failure rule: `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" and "challenges — 0.2.1 asks" C1–C6, C8 (2026-11-08)
+  - Tolerant handling is the default, strict chosen by the app, availability: `[confirmed: user]` interview "Delta — tolerant handling becomes the default" (2026-11-09), C10
 
 ### FEAT-008 — Embed text
 - **Purpose:** Turn one text or a batch of texts into vectors. · **Actors:** ACT-001, ACT-002 · **Priority:** must
@@ -196,21 +206,23 @@ Default source for features without their own `Source:` detail: `[confirmed: use
   - Accepted llama-swap gap; rule unchanged: `[confirmed: user]` interview "finalize batch-2026-11-08" (2026-11-08)
 
 ### FEAT-011 — Trace every LLM interaction
-- **Purpose:** Turn on, through the environment, a readable per-call record of prompts, requests, streamed pieces, tool calls and results, answers and errors, as a debugging aid. · **Actors:** ACT-001 · **Priority:** must
+- **Purpose:** Turn on, through the environment or per client by the app, a readable per-call record of prompts, requests, streamed pieces, tool calls and results, answers and errors, as a debugging aid. · **Actors:** ACT-001 · **Priority:** must
 - **Status:** delivered
 - **Rule:**
   - Tracing is a debugging aid for the developer, not an audit record; records are plain readable text, not redacted, and best-effort.
   - Tracing is off unless the developer turns it on and names a folder.
+  - The app may force tracing on or off when building a client, overriding the environment; forced on still needs the trace folder named in the environment, and building the client is refused, naming the reason, when it is missing.
   - The access credential is never written to a record; a credential embedded in the server address or echoed in a server reply is not covered (accepted).
   - Tracing must never change a call's outcome.
   - A call with an empty system instruction still gets a system section in its record (accepted).
 - **Delivered:** legacy; 002.edge-fixes (2026-11-07)
-- **Realized by:** UC-011; US-048, US-049, US-050, US-051, US-052
+- **Realized by:** UC-011; US-048, US-049, US-050, US-051, US-052, US-069
 - **Gap:** none.
 - **Source:**
   - Base feature: `[confirmed: user]` interview "2026-11-07 — Phase 2 spec-seed round" (operator = developer); "2026-11-07 — Vision discussion" (signal 5)
   - Debugging-aid role, never changes a call's outcome, defect gaps, accepted empty-instruction section, accepted credential scope, supported trace facility: `[confirmed: user]` interview "Wave 6 — FEAT-011 tracing (batched, 2026-11-07)"
   - Off unless turned on with a folder, credential never written: behaviour per deep-docs notes I-11-I-32
+  - Per-client force on/off rule: `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
 
 ### FEAT-012 — Fill prompt templates
 - **Purpose:** Replace named placeholders in a prompt template with values. · **Actors:** ACT-001 · **Priority:** must
@@ -256,7 +268,10 @@ Default source for features without their own `Source:` detail: `[confirmed: use
 - The library's own error carries the server's reason, including the server's reply text, and never a credential.
 - A failure the server reports inside a stream, an unreachable server and an exceeded time limit are the library's own error with the server's reason, on every backend; a stream that ends early is the library's own error; so is a malformed reply on a listing or embedding call.
 - A malformed chat reply may surface as another kind of error (accepted, chat completions only).
+- The library's error tells the app, without reading its text, what kind of failure it was — a server refusal (with the server's status), an exceeded time limit, an interrupted stream, an unreachable server, a malformed reply, a failure the server reports inside a stream, an incomplete reply, a tool conversation failure — and its message text stays as it was.
+- An app checked by a strict type checker uses the library without type errors.
 - **Source:**
+  - Failure kinds, strict type checking: `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
   - `[confirmed: user]` interview "Wave 2 — FEAT-002 / FEAT-003 / FEAT-010 + errors (batched)" (2026-11-07)
   - Amended streaming rule (Responses): `[confirmed: user]` interview "challenges — Responses delta" (2026-11-07), C3
   - Amended to what shipped: sweeps 001.core-fixes and 002.edge-fixes (2026-11-08)
