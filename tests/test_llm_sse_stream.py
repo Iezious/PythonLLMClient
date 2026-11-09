@@ -12,6 +12,12 @@ payloads (drives a parser alone; the parser then gets ``response=None``).
 
 DoD-14 (the existing ``tests/test_llm_tools_reasoning_stream.py`` passes unchanged) is covered
 by that file itself, which is not edited for these tests.
+
+Feature 006 step 003 (DEC-arch-19, DEC-001-7) adds, at the end of the file, the error ``kind``
+of these failures: a transfer failing while the reader consumes the stream carries ``interrupted``
+/ ``timeout`` / ``connection`` with its text unchanged (step DoD-3), an error frame carries
+``server_failed`` and a stream ending without a completion signal ``incomplete`` (step DoD-4).
+Those tests carry the suffix ``__s003_DoD<n>``, distinct from the earlier ``__DoD<n>`` ids.
 """
 
 import json
@@ -676,3 +682,123 @@ async def test_openai_receiver_transport_like_failure_not_wrapped__DoD13(parser,
     assert info.value is error
     assert not isinstance(info.value, LLMError)
     assert pieces == ["first"]
+
+
+# =========================================================================== Feature 006 step 003
+
+
+# Failures while the reader consumes an open stream, with the text kind DEC-001-7 fixes for each
+# (``Request to <url> failed: <text kind>``) and the error kind DEC-arch-19 maps it to. aiohttp's
+# per-read timeout (``ServerTimeoutError`` family) is a timeout, recognised before other client errors.
+def _kinded_read_failures() -> list[Any]:
+    return [
+        pytest.param(
+            aiohttp.ClientPayloadError("Response payload is not completed"),
+            "interrupted transfer",
+            "interrupted",
+            id="payload-error",
+        ),
+        pytest.param(aiohttp.ServerDisconnectedError(), "interrupted transfer", "interrupted", id="disconnect"),
+        pytest.param(TimeoutError(), "timeout", "timeout", id="timeout"),
+        pytest.param(
+            aiohttp.ServerTimeoutError("Timeout on reading data from socket"), "timeout", "timeout", id="read-timeout"
+        ),
+        pytest.param(aiohttp.ClientConnectionError("Connection lost"), "connection failure", "connection", id="conn"),
+    ]
+
+
+# --------------------------------------------------------------------------- step DoD-3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "text_kind", "kind"), _kinded_read_failures())
+async def test_openai_reader_mid_stream_failure_kind_and_text__s003_DoD3(error, text_kind, kind):
+    """Step 003 DoD-3: a failure mid-stream in the reader has the matching kind; text "Request to <url> failed: <k>"."""
+    chunks = [b"data: " + _piece(content="partial").encode("utf-8") + b"\n\n"]
+    with pytest.raises(LLMError) as info:
+        await _read_events(chunks, error=error)
+    err = info.value
+    assert err.kind == kind
+    assert err.message == f"Request to {STREAM_URL} failed: {text_kind}"
+    assert err.status is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "text_kind", "kind"), _kinded_read_failures())
+@pytest.mark.parametrize("parser", ["plain", "tools"])
+async def test_openai_parsers_mid_stream_failure_keep_kind__s003_DoD3(parser, error, text_kind, kind):
+    """Step 003 DoD-3: through either parser, a transfer cut mid-stream surfaces with the same kind and text."""
+    response = _FakeResponse([_sse(_piece(content="partial"))], error)
+    client = _client()
+    with pytest.raises(LLMError) as info:
+        if parser == "plain":
+            await client._stream_openai_chat_response(response, _Recorder())
+        else:
+            await client._stream_openai_tools_response(response, _Recorder())
+    assert info.value.kind == kind
+    assert info.value.message == f"Request to {STREAM_URL} failed: {text_kind}"
+
+
+# --------------------------------------------------------------------------- step DoD-4
+
+
+@pytest.mark.asyncio
+async def test_openai_plain_error_frame_is_server_failed__s003_DoD4(monkeypatch):
+    """Step 003 DoD-4: the plain parser's error frame raises ``LLMError`` with kind ``server_failed``."""
+    client = _stubbed_client(
+        monkeypatch,
+        [
+            _piece(content="Hello"),
+            json.dumps({"error": {"message": "model overloaded, retry later", "type": "server_error"}}),
+            "[DONE]",
+        ],
+    )
+    with pytest.raises(LLMError) as info:
+        await client._stream_openai_chat_response(None, _Recorder())
+    assert info.value.kind == "server_failed"
+    assert "model overloaded, retry later" in str(info.value)
+
+
+@pytest.mark.asyncio
+async def test_openai_tools_error_frame_is_server_failed__s003_DoD4(monkeypatch):
+    """Step 003 DoD-4: the tools parser's error frame raises ``LLMError`` with kind ``server_failed``."""
+    client = _stubbed_client(
+        monkeypatch,
+        [_piece(content="Partial"), json.dumps({"error": "quota gone"}), "[DONE]"],
+    )
+    with pytest.raises(LLMError) as info:
+        await client._stream_openai_tools_response(None, _Recorder())
+    assert info.value.kind == "server_failed"
+    assert "quota gone" in str(info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payloads",
+    [
+        pytest.param([_piece(content="cut "), _piece(content="off")], id="cut-off"),
+        pytest.param([], id="empty"),
+    ],
+)
+async def test_openai_plain_stream_without_completion_is_incomplete__s003_DoD4(monkeypatch, payloads):
+    """Step 003 DoD-4: the plain parser's stream ending with no finish reason and no [DONE] has kind ``incomplete``."""
+    client = _stubbed_client(monkeypatch, payloads)
+    with pytest.raises(LLMError) as info:
+        await client._stream_openai_chat_response(None, _Recorder())
+    assert info.value.kind == "incomplete"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payloads",
+    [
+        pytest.param([_piece(content="cut "), _piece(content="off")], id="cut-off"),
+        pytest.param([], id="empty"),
+    ],
+)
+async def test_openai_tools_stream_without_completion_is_incomplete__s003_DoD4(monkeypatch, payloads):
+    """Step 003 DoD-4: the tools parser's stream ending with no finish reason and no [DONE] has kind ``incomplete``."""
+    client = _stubbed_client(monkeypatch, payloads)
+    with pytest.raises(LLMError) as info:
+        await client._stream_openai_tools_response(None, _Recorder())
+    assert info.value.kind == "incomplete"

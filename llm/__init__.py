@@ -1,8 +1,9 @@
 """LLM client module for handling interactions with different language model APIs."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
-from .exceptions import LLMError, LLMSettingIgnoredWarning
+from .exceptions import LLMError, LLMErrorKind, LLMSettingIgnoredWarning, LLMToolObserverWarning
+from .tool_events import ToolErrorKind, ToolEvent
 from .llm_client import LLMClient
 from .ollama import OllamaAPIClient
 from .openai import OpenAIAPIClient
@@ -16,7 +17,11 @@ from .trace import LLMTracer
 __all__ = [
     "__version__",
     "LLMError",
+    "LLMErrorKind",
     "LLMSettingIgnoredWarning",
+    "LLMToolObserverWarning",
+    "ToolEvent",
+    "ToolErrorKind",
     "LLMClient",
     "OllamaAPIClient",
     "OpenAIAPIClient",

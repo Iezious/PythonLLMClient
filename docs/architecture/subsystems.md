@@ -6,10 +6,18 @@ Components, their responsibilities and boundaries, and the call structure betwee
 
 ## Base client (`LLMClient`)
 
-- Holds the state shared by every backend client: model, base address (trailing `/` stripped), timeout, bearer token, default options, the HTTP session and the tracer.
-- Provides the shared HTTP request contract, for plain and streamed requests alike: prefixes the base address, adds the bearer header only if a token exists, applies one total time limit per request, maps non-2xx to `LLMError` (a refused stream carries the server's reply), and maps transport failures (unreachable server, timeout, interrupted transfer) to `LLMError` carrying the address. For a plain request it returns decoded JSON for JSON responses; for a streamed request it opens the stream and hands the open reply to the caller, and read failures while the stream is consumed are mapped the same way. Every protocol class opens its streams through this contract.
-- Provides SSE parsing and the option-merge routine used by every backend.
+**Rule: no shared behaviour logic between client classes.** The base holds transport plumbing only: requests, streams, transport-error mapping, time limits and the tracer. Each client class holds its own copy of its behaviour, the tool loop included. The specification in these documents is what is maintained, so a class's code may be rewritten on its own without touching another class. The existing shared chat-completions stream parsers stay in the base, but new behaviour is not added to them. Behaviour that a feature adds goes into each class that needs it, as its own copy.
+
+We chose this because the user wants the classes to stay independent and flexible: "NO MIXED logic. We need to stay flexible. We are not supporting code. We do support specifications and rewrite code if needed." The cost is accepted: a behaviour change lands in every class that carries it. This rule restates the earlier per-class choices as architecture (DEC-arch-15; earlier DEC-000-35, DEC-arch-2).
+
+The option-merge routine also sits in the base and is behaviour, not transport. It is treated like the shared stream parsers: it stays in the base with its current behaviour and is not extended. A class whose merging must diverge takes its own copy and changes that, leaving the base routine as it is. We chose this over moving the merge into every class now, because that move would rewrite every class without changing any behaviour, while copying on divergence already keeps each class free to change on its own (DEC-arch-25).
+
+- Holds the state shared by every backend client: model, base address (trailing `/` stripped), timeout, silence limit (OpenAI family), bearer token, default options, the HTTP session and the tracer.
+- Provides the shared HTTP request contract, for plain and streamed requests alike: prefixes the base address, and adds the bearer header only if a token exists. It applies one total time limit per request and, on streamed requests, the optional silence limit between reads. It maps non-2xx to `LLMError` with the HTTP status (a refused stream carries the server's reply), and maps transport failures (unreachable server, timeout, interrupted transfer) to `LLMError` carrying the address and the matching error kind. For a plain request it returns decoded JSON for JSON responses; for a streamed request it opens the stream and hands the open reply to the caller, and read failures while the stream is consumed are mapped the same way. Every protocol class opens its streams through this contract.
+- Provides the SSE reader, the existing chat-completions stream parsers and the option-merge routine (shared as they are, not extended; see the rule above).
+- Builds the tracer once per client from the constructor's `trace` argument, or from the environment when it is not passed (see Tracer).
 - Declares the full method set; backends override it. The only concrete operation is `embed`, built on `embed_batch`.
+- Is generic over the settings shape; each class binds its own (see `interfaces.md`, Exposed: typing contract).
 
 ## Backend clients
 
@@ -18,7 +26,7 @@ Components, their responsibilities and boundaries, and the call structure betwee
   - `OpenAIAPIClient` and `LlamaSwapAPIClient` on Responses.
   - `OpenAIChatCompletionsClient` and `LlamaSwapChatCompletionsClient` on chat completions (the earlier behaviour of the two names above, renamed).
   - `OllamaAPIClient` (deprecated, unchanged).
-- The four OpenAI-family classes are independent implementations. They have no shared Responses base and no protocol component, so the protocol logic exists twice and every fix lands in both copies. This is accepted because the user prefers self-contained classes (DEC-arch-2; it continues DEC-000-35).
+- The four OpenAI-family classes are independent implementations, per the rule under Base client. They have no shared Responses base, no protocol component and no shared tool execution step, so the protocol logic and the tool loop exist once per class and every fix lands in each copy.
 - Ollama nests settings under a payload `options` object; the OpenAI family places them at the top level of the request.
 - Within one protocol, OpenAI and llama-swap differ only in auth requirement, thinking control and default address.
 
@@ -81,14 +89,14 @@ Per `chat_with_tools` call:
 1. Pre-flight: every advertised tool has a callable, else `ValueError` before any request.
 2. Round: build payload (model, conversation, tool definitions, stream flag, settings, optional `response_format`) and send.
 3. No tool calls in the reply: return the assistant content.
-4. Tool calls present: record the assistant turn (not on Ollama), run each tool, add one tool-result message per call, start the next round.
+4. Tool calls present: record the assistant turn (not on Ollama). Then, for each call in order: tell the observer the call starts, check and run the tool, tell the observer the result or the error, and add one tool-result message for the call. A failing call either gets a fixed model-facing text as its result (tolerant, the default) or ends the call (strict, when the caller asks for it). Start the next round.
 5. Round limit reached: the call fails (rules in `interfaces.md`, Tool loop contract).
 
-The same loop runs on both OpenAI-family protocols; each class holds its own copy.
+The same loop runs on both OpenAI-family protocols. Each class holds its own copy, the failure handling and the observer included (rule under Base client; DEC-arch-15). The deprecated Ollama loop has neither.
 
 Reasoning carry on Responses: when a round produces reasoning, it is sent back to the server on the next round of the same call, ahead of that round's tool calls. That way a reasoning model keeps its line of thought across tool results. The carried reasoning never enters the caller's conversation (which is never modified) or the returned answer, and it is discarded when the call ends. Chat completions carries no reasoning between rounds. Details are in DEC-arch-9.
 
-Arguments are validated against the tool's parameter names only. Ordering, failure and round-limit rules are in `interfaces.md`, Tool loop contract; failure kinds and their mapping, including a round cut at the app's output limit, are in `interfaces.md`, error contract.
+Arguments are validated against the tool's parameter names only, and not at all for a callable that accepts arbitrary keyword arguments. Ordering, failure and round-limit rules are in `interfaces.md`, Tool loop contract, Tool failures and Tool event observer; failure kinds and their mapping, including a round cut at the app's output limit, are in `interfaces.md`, error contract.
 
 ## Streaming and reasoning
 
@@ -106,12 +114,12 @@ Arguments are validated against the tool's parameter names only. Ordering, failu
 ## Tracer (`LLMTracer`)
 
 - A debugging aid, not an audit record: plain text, not redacted, best-effort.
-- Opt-in by environment: enabled when `LLM_TRACE` is true-like and `LLM_TRACE_FOLDER` is non-empty. Read once when a client is constructed.
+- Opt-in, decided once when a client is constructed. The constructor's `trace` argument decides when given: `False` never traces, and `True` traces into `LLM_TRACE_FOLDER`, refusing creation when that folder is not set. When `trace` is not passed, the environment decides as before: enabled when `LLM_TRACE` is true-like and `LLM_TRACE_FOLDER` is non-empty (see `interfaces.md`, Exposed: constructor arguments).
 - One trace record per traced operation (`generate`, `chat`, `chat_json`, `chat_with_tools`, `embed_batch`), including concurrent calls that start at the same instant: each gets its own record (naming in `data-model.md`, Trace record).
 - Tracing must never change a call's outcome:
   - A record that cannot be created (for example, an unwritable folder) leaves the call untraced; nothing is reported.
   - A failure while writing a record ends that record, never the call; the call's own result or error reaches the caller unchanged, and the record file is always released.
-- Covered: plain streamed chat pieces (not tool-path streams); tool requests and results; errors raised inside the traced part, which are recorded and re-raised. Not covered: round-limit exhaustion, the JSON-check failure, model listing.
+- Covered: plain streamed chat pieces (not tool-path streams); tool requests and results; tool failures handled in tolerant mode, recorded as what the model was told plus the failure kind; observer failures in tolerant mode; errors raised inside the traced part, which are recorded and re-raised. Not covered: round-limit exhaustion, the JSON-check failure, model listing.
 - The credential header is never written. Prompts, completions, tool arguments and results are recorded.
 - The tracer is a supported public surface: an application may open a trace session with any operation label and log to it.
 - Record layout is in `data-model.md`.
@@ -119,3 +127,9 @@ Arguments are validated against the tool's parameter names only. Ordering, failu
 ## Utilities
 
 `substitute_placeholders`, the repeated-fill template helper and `pydantic_to_openai_tool` are stateless helpers with no dependency on the clients; the factory `get_llm_client` selects and constructs a backend client. Contracts are in `interfaces.md`.
+
+## Decision history
+
+- 2026-11-09 (release 0.2.1) — "No shared behaviour logic between client classes" becomes an architecture rule. The base holds transport plumbing only, and each class holds its own copy of its behaviour, the tool loop included. See DEC-arch-15 (restating DEC-000-35, DEC-arch-2).
+- 2026-11-09 (release 0.2.1) — The tool loop gains tolerant failure handling and a tool-event observer, in each OpenAI-family class's own copy; the base gains the streamed-reply silence limit and the error kinds in its transport mapping; the tracer can be switched on or off by the constructor. See DEC-arch-14, DEC-arch-19, DEC-arch-20, DEC-arch-21, DEC-arch-27.
+- 2026-11-09 (release 0.2.1) — The option-merge routine stays in the base like the shared stream parsers: not extended, copied into a class that needs to diverge. See DEC-arch-25.

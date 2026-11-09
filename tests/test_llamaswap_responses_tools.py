@@ -908,6 +908,8 @@ async def test_llamaswap_other_result_sent_as_its_text_form__DoD11(monkeypatch, 
 # ---------------------------------------------------------------------------
 # DoD-12, DoD-13, DoD-14, DoD-15 — tool-loop failures
 # ---------------------------------------------------------------------------
+# The tool-call failure tests below run in strict mode: they pass ``tool_errors="raise"`` because the
+# loop is tolerant by default (DEC-arch-28; plan 006 step 007 DoD-10 keeps their assertions unchanged).
 
 
 @pytest.mark.asyncio
@@ -934,15 +936,19 @@ async def test_llamaswap_advertised_tool_without_callable_refused_before_request
 
 @pytest.mark.asyncio
 async def test_llamaswap_call_to_unadvertised_tool_ends_with_llmerror__DoD13(monkeypatch):
-    """DoD-13: a call naming a tool not advertised ends with LLMError naming it, even when tools holds a
-    callable under that name; that callable does not run (US-035.AC-1, DEC-002-3)."""
+    """DoD-13: in strict mode (``tool_errors="raise"``, DEC-arch-28) a call naming a tool not advertised ends
+    with LLMError naming it, even when tools holds a callable under that name; that callable does not run
+    (US-035.AC-1, DEC-002-3)."""
     hidden = _Tool()
     client = _client()
     _rounds(monkeypatch, client, [_reply(_R1, _call("hidden_tool", "{}", "call_x"))])
 
     with pytest.raises(LLMError) as excinfo:
         await client.chat_with_tools(
-            [_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": _Tool(), "hidden_tool": hidden}
+            [_user(_ASK)],
+            tools_definitions=_LOOKUP_DEFS,
+            tools={"lookup": _Tool(), "hidden_tool": hidden},
+            tool_errors="raise",
         )
 
     assert "hidden_tool" in str(excinfo.value)
@@ -952,13 +958,16 @@ async def test_llamaswap_call_to_unadvertised_tool_ends_with_llmerror__DoD13(mon
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", [pytest.param("", id="empty"), pytest.param(_MISSING, id="missing")])
 async def test_llamaswap_call_with_empty_or_missing_name_ends_with_llmerror__DoD13(monkeypatch, name):
-    """DoD-13: a call with an empty or missing name ends with LLMError; no tool runs (DEC-002-3)."""
+    """DoD-13: in strict mode (``tool_errors="raise"``, DEC-arch-28) a call with an empty or missing name ends
+    with LLMError; no tool runs (DEC-002-3)."""
     lookup = _Tool()
     client = _client()
     _rounds(monkeypatch, client, [_reply(_R1, _call(name, "{}", "call_x"))])
 
     with pytest.raises(LLMError):
-        await client.chat_with_tools([_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup})
+        await client.chat_with_tools(
+            [_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup}, tool_errors="raise"
+        )
 
     assert lookup.calls == []
 
@@ -973,14 +982,17 @@ async def test_llamaswap_call_with_empty_or_missing_name_ends_with_llmerror__DoD
     ],
 )
 async def test_llamaswap_unreadable_arguments_end_with_llmerror_naming_tool__DoD14(monkeypatch, arguments):
-    """DoD-14: argument text that is not JSON, or JSON that is not an object, ends with LLMError naming the
-    tool, and the tool does not run (US-035.AC-2, DEC-002-4)."""
+    """DoD-14: in strict mode (``tool_errors="raise"``, DEC-arch-28) argument text that is not JSON, or JSON
+    that is not an object, ends with LLMError naming the tool, and the tool does not run (US-035.AC-2,
+    DEC-002-4)."""
     lookup = _Tool()
     client = _client()
     _rounds(monkeypatch, client, [_reply(_R1, _call("lookup", arguments, "call_x"))])
 
     with pytest.raises(LLMError) as excinfo:
-        await client.chat_with_tools([_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup})
+        await client.chat_with_tools(
+            [_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup}, tool_errors="raise"
+        )
 
     assert "lookup" in str(excinfo.value)
     assert lookup.calls == []
@@ -1009,8 +1021,8 @@ async def test_llamaswap_empty_or_missing_arguments_run_tool_without_arguments__
 
 @pytest.mark.asyncio
 async def test_llamaswap_unknown_argument_name_ends_with_valueerror__DoD15(monkeypatch):
-    """DoD-15: an argument name the callable lacks ends with ValueError and the tool does not run
-    (US-033.AC-1, DEC-004-11)."""
+    """DoD-15: in strict mode (``tool_errors="raise"``, DEC-arch-28) an argument name the callable lacks ends
+    with ValueError and the tool does not run (US-033.AC-1, DEC-004-11)."""
     runs: list[str] = []
 
     def lookup(city: str) -> str:
@@ -1021,15 +1033,17 @@ async def test_llamaswap_unknown_argument_name_ends_with_valueerror__DoD15(monke
     _rounds(monkeypatch, client, [_reply(_R1, _call("lookup", '{"town": "Paris"}', "call_x"))])
 
     with pytest.raises(ValueError):
-        await client.chat_with_tools([_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup})
+        await client.chat_with_tools(
+            [_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup}, tool_errors="raise"
+        )
 
     assert runs == []
 
 
 @pytest.mark.asyncio
 async def test_llamaswap_raising_tool_ends_with_runtimeerror_and_no_further_request__DoD15(monkeypatch):
-    """DoD-15: a tool that raises ends with RuntimeError naming the tool; no further request is sent
-    (US-033.AC-2, US-033.AC-3, DEC-004-11)."""
+    """DoD-15: in strict mode (``tool_errors="raise"``, DEC-arch-28) a tool that raises ends with RuntimeError
+    naming the tool; no further request is sent (US-033.AC-2, US-033.AC-3, DEC-004-11)."""
 
     def lookup(city: str) -> str:
         raise ZeroDivisionError("boom inside the tool")
@@ -1038,7 +1052,9 @@ async def test_llamaswap_raising_tool_ends_with_runtimeerror_and_no_further_requ
     captured = _rounds(monkeypatch, client, [_TOOL_ROUND, _FINAL_ROUND])
 
     with pytest.raises(RuntimeError) as excinfo:
-        await client.chat_with_tools([_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup})
+        await client.chat_with_tools(
+            [_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": lookup}, tool_errors="raise"
+        )
 
     assert "lookup" in str(excinfo.value)
     assert len(captured) == 1
@@ -1046,14 +1062,17 @@ async def test_llamaswap_raising_tool_ends_with_runtimeerror_and_no_further_requ
 
 @pytest.mark.asyncio
 async def test_llamaswap_unserialisable_result_ends_with_llmerror_naming_tool__DoD15(monkeypatch):
-    """DoD-15: a mapping result that cannot be serialised to JSON ends with LLMError naming the tool
-    (US-033.AC-4, US-035.AC-3, DEC-002-5)."""
+    """DoD-15: in strict mode (``tool_errors="raise"``, DEC-arch-28) a mapping result that cannot be
+    serialised to JSON ends with LLMError naming the tool (US-033.AC-4, US-035.AC-3, DEC-002-5)."""
     client = _client()
     captured = _rounds(monkeypatch, client, [_TOOL_ROUND, _FINAL_ROUND])
 
     with pytest.raises(LLMError) as excinfo:
         await client.chat_with_tools(
-            [_user(_ASK)], tools_definitions=_LOOKUP_DEFS, tools={"lookup": _Tool(result={"when": object()})}
+            [_user(_ASK)],
+            tools_definitions=_LOOKUP_DEFS,
+            tools={"lookup": _Tool(result={"when": object()})},
+            tool_errors="raise",
         )
 
     assert "lookup" in str(excinfo.value)

@@ -10,19 +10,24 @@ Feature 002: the tool loop maps an unoffered tool, unreadable arguments and an
 unserialisable result to ``LLMError`` and names the round limit in its error (DEC-002-2..5).
 Feature 002: embeddings and model-list replies are checked, embeddings ordered by
 position, and unreadable bodies mapped to ``LLMError`` (DEC-002-8..10).
+Feature 006: ``chat_with_tools`` tells the model about tool failures by default (strict opt-out
+``tool_errors="raise"``) and reports each call to an optional tool-event observer (``_run_tool_call``).
 """
 
-from collections.abc import Mapping
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 import json
 import inspect
+import warnings
 
 import aiohttp
 
 from llm.llm_client import LLMClient
-from llm.exceptions import LLMError
+from llm.exceptions import LLMError, LLMToolObserverWarning
 from llm.message import LLMMessage
 from llm.options import OpenAIOptions
+from llm.tool_events import ToolErrorKind, ToolEvent
+from llm.trace import TraceSession
 
 # Settings the llama-swap client accepts. Every value is None: the table contributes no
 # built-in value, so only keys the app set reach the server (DEC-001-13). `stop`,
@@ -47,6 +52,13 @@ _LLAMA_SWAP_ALIAS_MAP = {
     "context_length": "max_tokens",
 }
 
+_ToolEventObserver = Callable[[ToolEvent], Optional[Awaitable[None]]]
+"""This class's own type of the ``on_tool_event`` observer (DEC-arch-15: not imported from another client module).
+
+A plain function returning ``None`` or a coroutine function; the loop awaits the returned value when it is
+awaitable, inline, before going on (DEC-arch-18).
+"""
+
 
 def _offered_tool_name(call: Any, offered: set[str]) -> str:
     """Return the tool name of one requested call after checking it was offered.
@@ -61,14 +73,15 @@ def _offered_tool_name(call: Any, offered: set[str]) -> str:
     Raises:
         LLMError: The name is missing or empty (also when the call or its ``function`` is not a
             mapping), or it is not advertised, even when ``tools`` has a callable for it (DEC-002-3).
+            ``kind="tool"`` (DEC-arch-19); ``_run_tool_call`` maps it to ``not_offered``.
     """
     function = call.get("function") if isinstance(call, Mapping) else None
     name = function.get("name") if isinstance(function, Mapping) else None
     # A malformed call is reported as an empty name rather than a raw KeyError/TypeError.
     if not name:
-        raise LLMError("The model requested a tool call with an empty tool name")
+        raise LLMError("The model requested a tool call with an empty tool name", kind="tool")
     if not isinstance(name, str) or name not in offered:
-        raise LLMError(f"The model requested tool '{name}', which was not offered")
+        raise LLMError(f"The model requested tool '{name}', which was not offered", kind="tool")
     return name
 
 
@@ -85,7 +98,7 @@ def _read_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
     Raises:
         LLMError: Text that is not JSON (chained from the decode error), JSON that is not an object,
             or a value that is neither text nor a mapping; the description carries the reason
-            (DEC-002-4).
+            (DEC-002-4). ``kind="tool"`` (DEC-arch-19); ``_run_tool_call`` maps it to ``bad_arguments``.
     """
     # Only None and "" count as "no arguments"; other falsy values (0, [], False) are unusable
     # forms and fall through to the error below (DEC-002-4).
@@ -97,16 +110,20 @@ def _read_tool_arguments(name: str, raw: Any) -> dict[str, Any]:
         try:
             decoded = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise LLMError(f"Arguments for tool '{name}' are not valid JSON", description=str(exc)) from exc
+            raise LLMError(
+                f"Arguments for tool '{name}' are not valid JSON", description=str(exc), kind="tool"
+            ) from exc
         if not isinstance(decoded, dict):
             raise LLMError(
                 f"Arguments for tool '{name}' are not a JSON object",
                 description=f"decoded to {type(decoded).__name__}",
+                kind="tool",
             )
         return decoded
     raise LLMError(
         f"Arguments for tool '{name}' are not readable",
         description=f"unsupported type {type(raw).__name__}",
+        kind="tool",
     )
 
 
@@ -122,6 +139,7 @@ def _tool_result_text(name: str, result: Any) -> str:
 
     Raises:
         LLMError: The ``dict`` or ``list`` cannot be serialised (chained from the error, DEC-002-5).
+            ``kind="tool"`` (DEC-arch-19); ``_run_tool_call`` maps it to ``unserialisable_result``.
     """
     # Only dict/list are JSON-encoded, as before; other values (including non-dict mappings) keep
     # their text form so an object with a custom __str__ is still sent as that text.
@@ -131,10 +149,12 @@ def _tool_result_text(name: str, result: Any) -> str:
         return json.dumps(result, ensure_ascii=False)
     except (TypeError, ValueError) as exc:
         # TypeError: a non-serialisable element; ValueError: a circular reference.
-        raise LLMError(f"Result of tool '{name}' cannot be serialised to JSON", description=str(exc)) from exc
+        raise LLMError(
+            f"Result of tool '{name}' cannot be serialised to JSON", description=str(exc), kind="tool"
+        ) from exc
 
 
-async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str, **kwargs: Any) -> Any:
+async def _fetch_reply(client: LLMClient[Any], operation: str, method: str, path: str, **kwargs: Any) -> Any:
     """Send one non-streamed request for listing or embeddings and map an undecodable 2xx body.
 
     Args:
@@ -150,13 +170,18 @@ async def _fetch_reply(client: LLMClient, operation: str, method: str, path: str
     Raises:
         LLMError: The successful body could not be decoded as JSON (chained from the decode error,
             DEC-002-10). An ``LLMError`` raised by ``_request`` (non-2xx, transport) passes through.
+            The decode error carries kind ``invalid_reply`` (DEC-arch-19); a pass-through keeps its own.
     """
     try:
         return await client._request(method, path, **kwargs)
     # DEC-002-10: only the two decode errors ``_request`` lets escape on a 2xx JSON body are mapped;
     # a broad ValueError catch could swallow unrelated errors. ``_request`` is not edited.
     except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
-        raise LLMError(f"Unreadable reply from llama-swap when {operation}", description=str(exc)) from exc
+        raise LLMError(
+            f"Unreadable reply from llama-swap when {operation}",
+            description=str(exc),
+            kind="invalid_reply",
+        ) from exc
 
 
 def _reply_text(response: Any) -> str:
@@ -179,20 +204,23 @@ def _reply_entries(response: Any, operation: str) -> list[Any]:
     Raises:
         LLMError: The reply is not a mapping (including a bytes body), has no ``data`` (the
             pre-existing message, reply inline), or ``data`` is not a list.
+            Every such error carries kind ``invalid_reply`` (DEC-arch-19).
     """
     if not isinstance(response, Mapping):
         raise LLMError(
             f"Invalid response from llama-swap when {operation}: the reply is not a JSON object",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     if "data" not in response:
         # Wording kept from before DEC-002-8 / DEC-002-9; older tests may match it.
-        raise LLMError(f"Invalid response from llama-swap when {operation}: {response}")
+        raise LLMError(f"Invalid response from llama-swap when {operation}: {response}", kind="invalid_reply")
     entries = response["data"]
     if not isinstance(entries, list):
         raise LLMError(
             f"Invalid response from llama-swap when {operation}: 'data' is not a list",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     return entries
 
@@ -210,6 +238,7 @@ def _model_entries(response: Any, operation: str) -> list[Any]:
     Raises:
         LLMError: The reply shape is wrong (see ``_reply_entries``), an entry is not a mapping, or
             an entry's ``id`` is missing, not a string or empty.
+            Every such error carries kind ``invalid_reply`` (DEC-arch-19).
     """
     entries = _reply_entries(response, operation)
     for position, entry in enumerate(entries):
@@ -217,12 +246,14 @@ def _model_entries(response: Any, operation: str) -> list[Any]:
             raise LLMError(
                 f"Invalid response from llama-swap when {operation}: model entry {position} is not an object",
                 description=_reply_text(response),
+                kind="invalid_reply",
             )
         model_id = entry.get("id")
         if not isinstance(model_id, str) or not model_id:
             raise LLMError(
                 f"Invalid response from llama-swap when {operation}: model entry {position} has no non-empty text id",
                 description=_reply_text(response),
+                kind="invalid_reply",
             )
     return entries
 
@@ -242,6 +273,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         LLMError: The reply shape is wrong (see ``_reply_entries``); an entry is not a mapping or
             its ``embedding`` is missing, not a list or empty; the entry count differs from
             ``count``; or all entries carry integer positions that are not exactly ``0..count-1``.
+            Every such error carries kind ``invalid_reply`` (DEC-arch-19).
     """
     operation = "embedding"
     entries = _reply_entries(response, operation)
@@ -259,11 +291,13 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         raise LLMError(
             f"Invalid response from llama-swap when {operation}: entry {position} {problem}",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     if len(entries) != count:
         raise LLMError(
             f"Invalid response from llama-swap when {operation}: {len(entries)} vectors returned for {count} texts",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     indices = [entry.get("index") for entry in entries]
     # DEC-002-8: positions are used only when every entry has one; a bool is an int subclass but is
@@ -274,6 +308,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
         raise LLMError(
             f"Invalid response from llama-swap when {operation}: positions are not exactly 0..{count - 1}",
             description=_reply_text(response),
+            kind="invalid_reply",
         )
     ordered: list[Any] = [None] * count
     for index, entry in zip(indices, entries):
@@ -281,7 +316,7 @@ def _embedding_vectors(response: Any, count: int) -> list[Any]:
     return ordered
 
 
-class LlamaSwapChatCompletionsClient(LLMClient):
+class LlamaSwapChatCompletionsClient(LLMClient[OpenAIOptions]):
     """OpenAI-compatible client for llama-swap (no auth by default), the chat-completions protocol class.
 
     Built by ``get_llm_client(..., protocol="chat_completions")`` or directly; independent of the
@@ -300,9 +335,30 @@ class LlamaSwapChatCompletionsClient(LLMClient):
         base_url: str = "http://localhost:8080/v1",
         timeout: float = 600.0,
         bearer_token: Optional[str] = None,
-        default_options: Optional[Dict[str, Any]] = None,
+        default_options: Optional[OpenAIOptions] = None,
+        *,
+        read_timeout: float | None = None,
+        trace: bool | None = None,
     ) -> None:
-        super().__init__(model, base_url, timeout, bearer_token, default_options)
+        """Create the client; no request is sent.
+
+        Args:
+            model: Model id sent with every request.
+            base_url: llama-swap address including ``/v1``.
+            timeout: Total per-request timeout in seconds.
+            bearer_token: Optional credential, sent as the bearer header when given.
+            default_options: Client-default settings, merged under per-call settings.
+            read_timeout: Silence limit in seconds for streamed requests (the per-read limit), or ``None``
+                for none; forwarded to the base (DEC-arch-20, DEC-006-5).
+            trace: Per-client trace switch (``None`` = environment decides, ``False`` = off, ``True`` = on into
+                ``LLM_TRACE_FOLDER``); forwarded to the base (DEC-arch-27, DEC-006-5).
+
+        Raises:
+            ValueError: ``trace=True`` while ``LLM_TRACE_FOLDER`` is unset or empty (raised by the base).
+        """
+        super().__init__(
+            model, base_url, timeout, bearer_token, default_options, read_timeout=read_timeout, trace=trace
+        )
 
     def _merge_options(
         self,
@@ -497,7 +553,7 @@ class LlamaSwapChatCompletionsClient(LLMClient):
 
         Raises:
             LLMError: Request failure, or the reply is not valid JSON while ``response_schema``
-                is given.
+                is given (kind ``invalid_reply``, DEC-arch-19).
         """
         opt = self._merge_options(options=options)
 
@@ -533,6 +589,7 @@ class LlamaSwapChatCompletionsClient(LLMClient):
                 raise LLMError(
                     "LLM response was not valid JSON, despite requesting JSON mode.",
                     description=str(exc),
+                    kind="invalid_reply",
                 )
 
         return response_content
@@ -541,7 +598,7 @@ class LlamaSwapChatCompletionsClient(LLMClient):
         self,
         payload: Dict[str, Any],
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
-    ) -> tuple[str, list[dict]]:
+    ) -> tuple[str, list[dict[str, Any]]]:
         """Run one streamed tool round (test seam; inputs and outputs unchanged).
 
         Opens the request through the base ``_stream_post("/chat/completions", payload)`` helper
@@ -563,7 +620,7 @@ class LlamaSwapChatCompletionsClient(LLMClient):
 
     async def chat_with_tools(
         self,
-        messages: List[Dict[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         *,
         tools_definitions: List[Dict[str, Any]],
         tools: Dict[str, Callable[..., Any]],
@@ -573,8 +630,13 @@ class LlamaSwapChatCompletionsClient(LLMClient):
         stream: bool = False,
         on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        tool_errors: Literal["raise", "result"] = "result",
+        on_tool_event: Optional[_ToolEventObserver] = None,
     ) -> str:
         """Run the tool loop and return the final answer text.
+
+        ``messages`` is a read-only sequence of string-keyed mappings (any value type, so tool-call and
+        tool turns type-check); the loop works on its own copy and the caller's sequence is never modified.
 
         Each round sends the merged settings spread top-level; a truthy ``response_format``
         parameter is sent and replaces the ``response_format`` setting, otherwise the setting
@@ -583,7 +645,9 @@ class LlamaSwapChatCompletionsClient(LLMClient):
         conversation (DEC-001-12). Streamed rounds go through ``_tools_stream_request``.
 
         Each requested tool call is handled in order: offered-tool check, argument reading,
-        ``log_tool_call``, argument-name check, run, result conversion, ``log_tool_result``.
+        ``log_tool_call``, argument-name check, run, result conversion, ``log_tool_result``. The
+        exceptions named below are those of strict mode; tolerant mode tells the model instead (see
+        Tool failures).
 
         - Offered-tool check: a missing, empty or not-advertised name (not in
           ``tools_definitions``) raises ``LLMError`` naming the requested name, even when ``tools``
@@ -601,26 +665,58 @@ class LlamaSwapChatCompletionsClient(LLMClient):
           raised whose message states the round limit was reached, contains ``max_loops`` and
           the configured value (DEC-002-2). No partial answer is returned.
 
+        Tool failures (``tool_errors``, DEC-arch-28, DEC-006-9): the five failure kinds are
+        ``not_offered``, ``bad_arguments``, ``unknown_argument`` (an argument name the callable does not
+        declare, the first one in the model's order; skipped for a callable taking ``**kwargs`` or one
+        whose signature cannot be read, DEC-arch-16), ``tool_raised`` (an ordinary exception from the
+        tool) and ``unserialisable_result``.
+
+        - ``"result"`` (the default, tolerant): the failing call's tool is not run, or its failure is
+          caught; the model receives a tool message with the fixed text for the kind (DEC-arch-14) —
+          never exception text — carrying ``tool_call_id`` when the server gave an id; the trace gets
+          ``TOOL RESULT`` then ``TOOL ERROR`` (DEC-006-7); the remaining calls and rounds go on.
+        - ``"raise"`` (strict): the call ends with the exception listed under Raises, texts as before.
+          Only ``"raise"`` selects strict handling; any other value behaves as ``"result"``.
+
+        Cancellation and other non-ordinary exceptions propagate unchanged in both modes, with no
+        event and no tool message for that call. The round limit applies in both modes.
+
+        Tool event observer (``on_tool_event``): when given, it receives one ``ToolEvent`` per event,
+        in call order: ``start`` before the call is checked or run, then one ``result`` (``output`` =
+        the tool message text sent) or ``error`` (with its ``error_kind``). It may be a plain or a
+        coroutine function; an awaitable result is awaited before the loop goes on (DEC-arch-18).
+        ``call_id`` is the server's tool-call id or ``None``; ``arguments`` is the raw text as sent,
+        JSON text for a mapping, empty text when absent (DEC-006-4). In strict mode the ``error``
+        event arrives before the exception (DEC-arch-17), and an observer failure propagates
+        unchanged (after a ``start`` failure the tool does not run). In tolerant mode an observer
+        failure gets no further event for that call, a tool not yet run is not run, the model is
+        told ``Tool '<n>' failed.`` instead of any result, one ``LLMToolObserverWarning`` is
+        emitted and the trace records it (DEC-arch-26, DEC-006-7, DEC-006-8).
+
         Args:
-            messages: Conversation turns.
-            tools_definitions: Advertised tool definitions (OpenAI function format).
-            tools: Callables by tool name; every advertised tool must have one.
-            system: Optional system prompt, inserted as the first turn.
-            max_loops: Maximum number of rounds.
-            options: Per-call settings.
-            stream: Stream each round.
-            on_delta: Receiver of streamed text pieces; its failure propagates unchanged.
-            response_format: Response format for this call; wins over the setting.
+            messages: The conversation so far; copied, never modified.
+            tools_definitions: Tools advertised to the model (chat-completions ``function`` shape).
+            tools: Callables by tool name; every advertised tool needs one.
+            system: Optional system prompt placed first.
+            max_loops: Maximum number of model rounds.
+            options: Call-time settings (merged over the client's defaults).
+            stream: Stream each round through ``_tools_stream_request``.
+            on_delta: Receiver of streamed text pieces (streamed rounds only).
+            response_format: Optional ``response_format`` sent on every round (DEC-001-15).
+            tool_errors: ``"result"`` (default, tolerant) or ``"raise"`` (strict), see above.
+            on_tool_event: Optional tool-event observer, see above.
 
         Returns:
-            The final answer text (never ``None``).
+            The model's final answer text.
 
         Raises:
-            ValueError: An advertised tool has no callable (before any request), or a call's
-                argument names do not fit the callable (the tool is not run).
-            RuntimeError: A tool raises (message names the tool), or the round limit is reached.
-            LLMError: Request failure; a requested tool not offered or with an empty name; unreadable
-                arguments; an unserialisable mapping or list result.
+            ValueError: An advertised tool has no callable (before any request); in strict mode, a
+                call's argument names do not fit the callable (the tool is not run).
+            RuntimeError: In strict mode, a tool raises (message names the tool, chained from the
+                tool's exception); in both modes, the round limit is reached.
+            LLMError: Request failure; in strict mode (``kind="tool"``), a requested tool not offered or
+                with an empty name, unreadable arguments, or an unserialisable mapping or list result.
+            Exception: In strict mode, whatever the observer raised, unchanged.
         """
         advertised = {d["function"]["name"] for d in tools_definitions}
         missing = advertised - tools.keys()
@@ -629,7 +725,9 @@ class LlamaSwapChatCompletionsClient(LLMClient):
 
         opt = self._merge_options(options=options)
 
-        msgs = list(messages)
+        # DEC-006-2 / Step 002 DoD-3: the loop's own list of dict turns; the caller's read-only sequence
+        # (a tuple is fine) and its mappings are never modified.
+        msgs: list[dict[str, Any]] = [dict(m) for m in messages]
         if system:
             msgs.insert(0, {"role": "system", "content": system})
 
@@ -678,33 +776,253 @@ class LlamaSwapChatCompletionsClient(LLMClient):
                 )
 
                 for call in tool_calls:
-                    # DEC-002-3 / DEC-002-4 order: offered check, then argument reading, both before the tool can
-                    # run; calls earlier in this reply have already run and keep their effects.
-                    name = _offered_tool_name(call, advertised)
-                    func = tools[name]
-                    kwargs = _read_tool_arguments(name, call["function"].get("arguments"))
-                    t.log_tool_call(name, kwargs)
-                    if not all(k in inspect.signature(func).parameters for k in kwargs):
-                        raise ValueError(f"Bad args for tool '{name}': {kwargs}")
-                    try:
-                        result = func(**kwargs)
-                        if inspect.isawaitable(result):
-                            result = await result
-                    except Exception as exc:
-                        raise RuntimeError(f"Tool '{name}' failed: {exc}") from exc
-
-                    # Outside the try above, so a conversion failure stays LLMError and is not
-                    # reported as the tool's own failure (DEC-002-5).
-                    content = _tool_result_text(name, result)
-                    t.log_tool_result(name, content)
+                    # Sequential, in the order requested; shared by streamed and non-streamed rounds. A
+                    # tolerated failure appends the same tool message as a success, carrying the
+                    # model-facing text; calls earlier in this reply have already run and keep their effects.
+                    content = await self._run_tool_call(
+                        call,
+                        advertised=advertised,
+                        tools=tools,
+                        tool_errors=tool_errors,
+                        on_tool_event=on_tool_event,
+                        t=t,
+                    )
                     tool_message: Dict[str, Any] = {"role": "tool", "content": content}
-                    tool_call_id = call.get("id")
+                    # DEC-000-29: ``tool_call_id`` only when the server gave a truthy id, also for
+                    # tolerant failure messages.
+                    tool_call_id = call.get("id") if isinstance(call, Mapping) else None
                     if tool_call_id:
                         tool_message["tool_call_id"] = tool_call_id
                     msgs.append(tool_message)
 
         # DEC-002-2: stays RuntimeError and outside the trace session; the text keeps `max_loops`.
         raise RuntimeError(f"Tool loop reached its round limit (max_loops={max_loops}) without a final answer")
+
+    async def _run_tool_call(
+        self,
+        call: Any,
+        *,
+        advertised: set[str],
+        tools: Dict[str, Callable[..., Any]],
+        tool_errors: Literal["raise", "result"],
+        on_tool_event: Optional[_ToolEventObserver],
+        t: TraceSession,
+    ) -> str:
+        """Handle one requested tool call and return the content of its tool message.
+
+        This class's own copy of the per-call procedure (feature 006 ``context.md`` § Per-call
+        procedure; DEC-arch-15): ``start`` event, offered check, argument reading, argument-name check
+        (DEC-arch-16), ``TOOL CALL`` trace, run (awaited if awaitable), result to text, then the
+        ``result`` event and ``TOOL RESULT`` trace. The caller builds the tool message (adding
+        ``tool_call_id`` only when the server's id is truthy, DEC-000-29) and appends it.
+
+        Args:
+            call: One entry of the round's ``tool_calls`` as received (``id``, ``function.name``,
+                ``function.arguments`` as text, mapping or none).
+            advertised: Tool names offered in ``tools_definitions``.
+            tools: Callables by tool name.
+            tool_errors: ``"raise"`` selects strict handling; any other value is tolerant (DEC-006-9).
+            on_tool_event: Optional observer; each event is awaited inline when awaitable (DEC-arch-18).
+            t: The trace session of the running conversation.
+
+        Returns:
+            The tool result text on success; in tolerant mode, the fixed model-facing text for the
+            failure kind (DEC-arch-14) or ``Tool '<n>' failed.`` after an observer failure (DEC-006-8).
+
+        Raises:
+            LLMError: Strict mode, ``kind="tool"``: not offered / empty name, unreadable arguments,
+                unserialisable result (texts as before, DEC-002-3..5).
+            ValueError: Strict mode, an argument name the callable does not declare.
+            RuntimeError: Strict mode, the tool raised an ordinary exception (chained from it).
+            Exception: Strict mode, the observer's own exception, unchanged.
+            BaseException: Cancellation or another non-ordinary exception from the tool, in both
+                modes, unchanged and without an ``error`` event.
+
+        Side effects:
+            Sends events to the observer; writes trace entries (``TOOL CALL`` / ``TOOL RESULT`` /
+            ``TOOL ERROR``, DEC-006-7); in tolerant mode emits ``LLMToolObserverWarning`` once per
+            observer failure.
+        """
+        strict = tool_errors == "raise"  # DEC-006-9: only "raise" selects strict handling
+        function = call.get("function") if isinstance(call, Mapping) else None
+        raw_name = function.get("name") if isinstance(function, Mapping) else None
+        raw_arguments = function.get("arguments") if isinstance(function, Mapping) else None
+        raw_id = call.get("id") if isinstance(call, Mapping) else None
+        # Event identity (DEC-006-4): the requested name as sent (missing -> "", a non-text value as its
+        # text form), the server's call id only when it is a non-empty string, raw arguments as text
+        # (string verbatim, none -> "", a mapping as JSON text with non-ASCII kept). The same name is
+        # ``<n>`` in every model-facing text (DEC-arch-14).
+        event_name = raw_name if isinstance(raw_name, str) else ("" if raw_name is None else str(raw_name))
+        call_id = raw_id if isinstance(raw_id, str) and raw_id else None
+        if isinstance(raw_arguments, str):
+            arguments_text = raw_arguments
+        elif raw_arguments is None:
+            arguments_text = ""
+        else:
+            try:
+                arguments_text = json.dumps(raw_arguments, ensure_ascii=False)
+            except (TypeError, ValueError):
+                # A value JSON cannot encode (or a circular one) is shown as its text form.
+                arguments_text = str(raw_arguments)
+        failed_text = f"Tool '{event_name}' failed."
+        call_logged = False
+
+        def log_call(arguments: Any) -> None:
+            """Write this call's single ``TOOL CALL`` entry once (DEC-006-7): the parsed arguments when
+            read, otherwise the raw argument text."""
+            nonlocal call_logged
+            if not call_logged:
+                t.log_tool_call(event_name, arguments)
+                call_logged = True
+
+        async def notify(
+            event_type: Literal["start", "result", "error"],
+            *,
+            output: str | None = None,
+            error_kind: ToolErrorKind | None = None,
+        ) -> bool:
+            """Send one event to the observer, inline and awaited when awaitable (DEC-arch-18, DEC-000-23).
+
+            Returns ``True`` when the observer failed in tolerant mode; that failure is already handled
+            here (one ``LLMToolObserverWarning``, trace entries, DEC-006-7 / DEC-006-8) and the caller must
+            return ``failed_text`` without any further event for this call (DEC-arch-26). Returns ``False``
+            when there is no observer or it finished normally. Strict mode: the observer's ordinary
+            exception propagates unchanged. Cancellation always propagates.
+            """
+            if on_tool_event is None:
+                return False
+            event: ToolEvent = {
+                "type": event_type,
+                "name": event_name,
+                "call_id": call_id,
+                "arguments": arguments_text,
+                "output": output,
+                "error_kind": error_kind,
+            }
+            try:
+                outcome = on_tool_event(event)
+                if inspect.isawaitable(outcome):
+                    await outcome
+            except Exception as exc:
+                if strict:
+                    raise
+                observer_error = exc
+            else:
+                return False
+            # Handled outside the except block so the warning and trace writes carry no implicit
+            # exception context.
+            description = f"{type(observer_error).__name__}: {observer_error}"
+            warnings.warn(
+                f"Tool-event observer failed on the '{event_type}' event of tool '{event_name}': {description}",
+                LLMToolObserverWarning,
+                # notify -> _run_tool_call -> chat_with_tools -> the app's call site (outcome.md, step 006).
+                stacklevel=4,
+            )
+            log_call(arguments_text)
+            t.log_tool_result(event_name, failed_text)
+            t.log_tool_error(event_name, f"observer failed: {description}")
+            return True
+
+        async def fail(
+            kind: ToolErrorKind, model_text: str, strict_error: Exception, cause: Exception | None = None
+        ) -> str:
+            """Handle one tool failure of ``kind``: ``error`` event first, then raise or tolerate.
+
+            Strict (DEC-arch-17): raise ``strict_error`` (today's exception and text), chained from
+            ``cause`` when given (a helper's ``LLMError`` keeps its own chaining). Tolerant: trace
+            ``TOOL RESULT`` with ``model_text`` then ``TOOL ERROR`` with the kind name (DEC-006-7) and
+            return ``model_text``. An observer failure on the ``error`` event replaces both outcomes
+            (strict: propagates; tolerant: ``failed_text`` with only the observer-failure trace pair).
+            """
+            log_call(arguments_text)
+            if await notify("error", error_kind=kind):
+                return failed_text
+            if strict:
+                if cause is not None:
+                    raise strict_error from cause
+                raise strict_error
+            t.log_tool_result(event_name, model_text)
+            t.log_tool_error(event_name, kind)
+            return model_text
+
+        # Each check records its failure and handles it after leaving the ``except`` block, so a strict
+        # re-raise or an observer exception is not implicitly chained to it.
+        if await notify("start"):
+            # Observer failed on ``start`` (tolerant): the tool is not run (DEC-arch-26).
+            return failed_text
+
+        offered_error: LLMError | None = None
+        name = event_name
+        try:
+            name = _offered_tool_name(call, advertised)
+        except LLMError as exc:
+            offered_error = exc
+        if offered_error is not None:
+            return await fail("not_offered", f"Tool '{event_name}' is not available.", offered_error)
+
+        func = tools[name]  # pre-flight guarantees every advertised name has a callable
+        arguments_error: LLMError | None = None
+        kwargs: dict[str, Any] = {}
+        try:
+            kwargs = _read_tool_arguments(name, raw_arguments)
+        except LLMError as exc:
+            arguments_error = exc
+        if arguments_error is not None:
+            return await fail("bad_arguments", f"Invalid arguments for tool '{name}'.", arguments_error)
+
+        # Today's trace position: after the arguments are read, before the name check (DEC-006-7).
+        log_call(kwargs)
+        # DEC-arch-16: signature read once; the check is skipped for an unreadable signature or a
+        # ``**kwargs`` parameter. Names are tested in ``kwargs`` order, the order the model sent them
+        # (JSON decoding and ``dict`` copies keep it). Membership is today's rule (DEC-000-27).
+        undeclared: str | None = None
+        parameters: Any = None
+        try:
+            parameters = inspect.signature(func).parameters
+        except (TypeError, ValueError):
+            parameters = None
+        if parameters is not None and not any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+        ):
+            undeclared = next((key for key in kwargs if key not in parameters), None)
+        if undeclared is not None:
+            return await fail(
+                "unknown_argument",
+                f"Tool '{name}' has no argument '{undeclared}'.",
+                ValueError(f"Bad args for tool '{name}': {kwargs}"),
+            )
+
+        tool_error: Exception | None = None
+        result: Any = None
+        try:
+            result = func(**kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            # Only ordinary exceptions are tool failures; cancellation and other BaseExceptions
+            # propagate with no event and no tool message (interfaces.md § Tool failures).
+            tool_error = exc
+        if tool_error is not None:
+            return await fail(
+                "tool_raised", failed_text, RuntimeError(f"Tool '{name}' failed: {tool_error}"), cause=tool_error
+            )
+
+        # Outside the tool's try above, so a conversion failure stays its own kind (DEC-002-5). Any
+        # ordinary exception counts (e.g. a failing ``__str__``); strict re-raises it unchanged.
+        conversion_error: Exception | None = None
+        content = ""
+        try:
+            content = _tool_result_text(name, result)
+        except Exception as exc:
+            conversion_error = exc
+        if conversion_error is not None:
+            return await fail("unserialisable_result", failed_text, conversion_error)
+
+        if await notify("result", output=content):
+            # DEC-006-8: the result already produced is discarded; the model is told the tool failed.
+            return failed_text
+        t.log_tool_result(name, content)
+        return content
 
     async def embed_batch(
         self,

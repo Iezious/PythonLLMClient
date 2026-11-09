@@ -984,8 +984,9 @@ async def test_openai_advertised_tool_without_callable_refused_before_request__D
 
 @pytest.mark.asyncio
 async def test_openai_call_to_unadvertised_tool_raises_and_does_not_run__DoD13(monkeypatch):
-    """DoD-13 (US-035.AC-1, DEC-002-3): a call naming a tool not advertised, even with a callable under that
-    name in tools, ends with LLMError naming the tool, and that callable does not run."""
+    """DoD-13 (US-035.AC-1, DEC-002-3): in strict mode (``tool_errors="raise"``, DEC-arch-28; 006 DoD-10) a call
+    naming a tool not advertised, even with a callable under that name in tools, ends with LLMError naming the
+    tool, and that callable does not run."""
     secret_runs: list = []
     lookup_calls: list = []
     client = _client()
@@ -998,6 +999,7 @@ async def test_openai_call_to_unadvertised_tool_raises_and_does_not_run__DoD13(m
             list(USER_MESSAGES),
             tools_definitions=[_lookup_def()],
             tools={"lookup": _lookup_tool(lookup_calls), "secret_tool": lambda: secret_runs.append(1)},
+            tool_errors="raise",
         )
 
     assert "secret_tool" in str(excinfo.value)
@@ -1009,8 +1011,8 @@ async def test_openai_call_to_unadvertised_tool_raises_and_does_not_run__DoD13(m
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["", _MISSING], ids=["empty", "missing"])
 async def test_openai_call_with_empty_or_missing_name_raises__DoD13(monkeypatch, name):
-    """DoD-13 (US-035.AC-1, DEC-002-3): a call with an empty or missing name ends with LLMError saying the
-    name was empty, and no tool runs."""
+    """DoD-13 (US-035.AC-1, DEC-002-3): in strict mode (``tool_errors="raise"``, DEC-arch-28; 006 DoD-10) a call
+    with an empty or missing name ends with LLMError saying the name was empty, and no tool runs."""
     lookup_calls: list = []
     client = _client()
     records = _capture_rounds(
@@ -1019,7 +1021,10 @@ async def test_openai_call_with_empty_or_missing_name_raises__DoD13(monkeypatch,
 
     with pytest.raises(LLMError) as excinfo:
         await client.chat_with_tools(
-            list(USER_MESSAGES), tools_definitions=[_lookup_def()], tools={"lookup": _lookup_tool(lookup_calls)}
+            list(USER_MESSAGES),
+            tools_definitions=[_lookup_def()],
+            tools={"lookup": _lookup_tool(lookup_calls)},
+            tool_errors="raise",
         )
 
     assert "empty" in str(excinfo.value).lower()
@@ -1034,8 +1039,9 @@ async def test_openai_call_with_empty_or_missing_name_raises__DoD13(monkeypatch,
     ids=["invalid-json", "list", "number", "string", "null"],
 )
 async def test_openai_unreadable_arguments_raise_and_tool_does_not_run__DoD14(monkeypatch, arguments):
-    """DoD-14 (US-035.AC-2, DEC-002-4): argument text that is not JSON, or JSON that is not an object, ends
-    with LLMError naming the tool, and the tool does not run."""
+    """DoD-14 (US-035.AC-2, DEC-002-4): in strict mode (``tool_errors="raise"``, DEC-arch-28; 006 DoD-10)
+    argument text that is not JSON, or JSON that is not an object, ends with LLMError naming the tool, and the
+    tool does not run."""
     lookup_calls: list = []
     client = _client()
     records = _capture_rounds(
@@ -1044,7 +1050,10 @@ async def test_openai_unreadable_arguments_raise_and_tool_does_not_run__DoD14(mo
 
     with pytest.raises(LLMError) as excinfo:
         await client.chat_with_tools(
-            list(USER_MESSAGES), tools_definitions=[_lookup_def()], tools={"lookup": _lookup_tool(lookup_calls)}
+            list(USER_MESSAGES),
+            tools_definitions=[_lookup_def()],
+            tools={"lookup": _lookup_tool(lookup_calls)},
+            tool_errors="raise",
         )
 
     assert "lookup" in str(excinfo.value)
@@ -1079,8 +1088,8 @@ async def test_openai_empty_or_missing_arguments_run_tool_without_arguments__DoD
 
 @pytest.mark.asyncio
 async def test_openai_unknown_argument_name_raises_value_error__DoD15(monkeypatch):
-    """DoD-15 (US-033.AC-1, DEC-004-11): an argument name the callable lacks ends with ValueError and the
-    tool does not run."""
+    """DoD-15 (US-033.AC-1, DEC-004-11): in strict mode (``tool_errors="raise"``, DEC-arch-28; 006 DoD-10) an
+    argument name the callable lacks ends with ValueError and the tool does not run."""
     lookup_calls: list = []
     client = _client()
     records = _capture_rounds(
@@ -1089,7 +1098,10 @@ async def test_openai_unknown_argument_name_raises_value_error__DoD15(monkeypatc
 
     with pytest.raises(ValueError):
         await client.chat_with_tools(
-            list(USER_MESSAGES), tools_definitions=[_lookup_def()], tools={"lookup": _lookup_tool(lookup_calls)}
+            list(USER_MESSAGES),
+            tools_definitions=[_lookup_def()],
+            tools={"lookup": _lookup_tool(lookup_calls)},
+            tool_errors="raise",
         )
 
     assert lookup_calls == []
@@ -1098,8 +1110,8 @@ async def test_openai_unknown_argument_name_raises_value_error__DoD15(monkeypatc
 
 @pytest.mark.asyncio
 async def test_openai_raising_tool_ends_with_runtime_error__DoD15(monkeypatch):
-    """DoD-15 (US-033.AC-2, US-033.AC-3, DEC-004-11): a tool that raises ends with RuntimeError naming the
-    tool, and no further request is sent."""
+    """DoD-15 (US-033.AC-2, US-033.AC-3, DEC-004-11): in strict mode (``tool_errors="raise"``, DEC-arch-28; 006
+    DoD-10) a tool that raises ends with RuntimeError naming the tool, and no further request is sent."""
 
     def lookup(key: str) -> str:
         raise OSError("disk unavailable 77")
@@ -1110,7 +1122,9 @@ async def test_openai_raising_tool_ends_with_runtime_error__DoD15(monkeypatch):
     )
 
     with pytest.raises(RuntimeError) as excinfo:
-        await client.chat_with_tools(list(USER_MESSAGES), tools_definitions=[_lookup_def()], tools={"lookup": lookup})
+        await client.chat_with_tools(
+            list(USER_MESSAGES), tools_definitions=[_lookup_def()], tools={"lookup": lookup}, tool_errors="raise"
+        )
 
     assert "lookup" in str(excinfo.value)
     assert len(records) == 1
@@ -1118,8 +1132,9 @@ async def test_openai_raising_tool_ends_with_runtime_error__DoD15(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_unserialisable_mapping_result_raises__DoD15(monkeypatch):
-    """DoD-15 (US-033.AC-4, US-035.AC-3, DEC-002-5): a mapping result that cannot be serialised to JSON ends
-    with LLMError naming the tool, and no further request is sent."""
+    """DoD-15 (US-033.AC-4, US-035.AC-3, DEC-002-5): in strict mode (``tool_errors="raise"``, DEC-arch-28; 006
+    DoD-10) a mapping result that cannot be serialised to JSON ends with LLMError naming the tool, and no
+    further request is sent."""
     client = _client()
     records = _capture_rounds(
         monkeypatch, client, [_reply(_function_call("call_1", "lookup", '{"key": "k-9"}')), _answer_reply()]
@@ -1130,6 +1145,7 @@ async def test_openai_unserialisable_mapping_result_raises__DoD15(monkeypatch):
             list(USER_MESSAGES),
             tools_definitions=[_lookup_def()],
             tools={"lookup": lambda key: {"values": {1, 2, 3}}},
+            tool_errors="raise",
         )
 
     assert "lookup" in str(excinfo.value)

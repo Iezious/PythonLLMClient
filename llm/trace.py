@@ -24,7 +24,8 @@ import os
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import Any, Dict, Generator, Optional, TextIO
 
 _SEPARATOR = "=" * 60
 _SECTION = "-" * 40
@@ -45,7 +46,7 @@ class TraceSession:
     - The session never closes the file; ``LLMTracer.trace`` owns the file's lifetime.
     """
 
-    def __init__(self, f, model: str, operation: str, timestamp: datetime) -> None:
+    def __init__(self, f: TextIO, model: str, operation: str, timestamp: datetime) -> None:
         """Bind the session to an open text file and write the record header.
 
         Args:
@@ -101,7 +102,7 @@ class TraceSession:
         self._section("SYSTEM PROMPT")
         self._write(system)
 
-    def log_messages(self, messages: List[Dict[str, Any]]) -> None:
+    def log_messages(self, messages: Sequence[Mapping[str, Any]]) -> None:
         """Write the MESSAGE HISTORY section: ``[role] content`` lines plus tool-call lines.
 
         When this session logged a non-empty instruction through ``log_system``, the first
@@ -110,7 +111,8 @@ class TraceSession:
         caller's own system message, is written (DEC-002-14). An empty list writes nothing.
 
         Args:
-            messages: The messages as sent, in order.
+            messages: The messages as sent, in order; any read-only sequence of string-keyed mappings
+                (the clients pass ``LLMMessage`` lists and the tool loops' own dict lists).
         """
         if not messages:
             return
@@ -157,6 +159,25 @@ class TraceSession:
         self._section(f"TOOL RESULT: {name}")
         self._write(result)
 
+    def log_tool_error(self, name: str, note: str) -> None:
+        """Write the ``TOOL ERROR: <name>`` section carrying ``note`` (DEC-006-7; data-model.md § Trace record).
+
+        Used by the tool loops after the ``TOOL RESULT: <name>`` entry of a tolerated tool or observer
+        failure, so the record shows why the model received that text.
+
+        Args:
+            name: The tool name the model asked for (shown in the section title).
+            note: The failure note written as the section body (a failure kind name such as
+                ``not_offered``, or ``observer failed: <ExceptionType>: <message>``).
+
+        Never raises on a write failure: like every entry it follows DEC-002-12 (the session is marked
+        broken and later writes are skipped).
+        """
+        # Same layout family as TOOL RESULT: a titled section, the note as its body; ``_section`` and
+        # ``_write`` carry the DEC-002-12 guard, so nothing here can raise on a write failure.
+        self._section(f"TOOL ERROR: {name}")
+        self._write(note)
+
     def log_error(self, error: Exception) -> None:
         """Write the ERROR section as ``<TypeName>: <text>``; never raises on write failure."""
         self._section("ERROR")
@@ -173,9 +194,48 @@ class LLMTracer:
     """Checks env vars and creates trace sessions for LLM interactions."""
 
     def __init__(self) -> None:
+        """Read ``LLM_TRACE`` and ``LLM_TRACE_FOLDER``: enabled when the flag is true-like and the folder non-empty (DEC-000-4)."""
         trace_flag = os.environ.get("LLM_TRACE", "").strip().lower()
         self._folder = os.environ.get("LLM_TRACE_FOLDER", "").strip()
         self._enabled = trace_flag in ("1", "true", "on") and bool(self._folder)
+
+    @classmethod
+    def _from_switch(cls, trace: bool | None) -> LLMTracer:
+        """Build a tracer from a client's three-state ``trace`` switch (private; DEC-006-6, DEC-arch-27).
+
+        The public ``LLMTracer()`` constructor is unchanged; the client base builds its tracer once
+        through this path, so a refusal surfaces at client creation.
+
+        Args:
+            trace: ``None`` -> the environment decides exactly as ``LLMTracer()`` does (``LLM_TRACE``
+                true-like and ``LLM_TRACE_FOLDER`` non-empty, DEC-000-4); ``False`` -> disabled whatever
+                the environment says; ``True`` -> enabled with the folder from ``LLM_TRACE_FOLDER``,
+                ``LLM_TRACE`` not consulted.
+
+        Returns:
+            The resolved ``LLMTracer``.
+
+        Raises:
+            ValueError: When ``trace`` is ``True`` and ``LLM_TRACE_FOLDER`` is unset or empty; the message
+                names ``LLM_TRACE_FOLDER``.
+        """
+        if trace is None:
+            # Exactly the public constructor's environment read, so behaviour without a switch is unchanged.
+            return cls()
+        if trace is False:
+            tracer = cls.__new__(cls)
+            tracer._folder = ""
+            tracer._enabled = False
+            return tracer
+        # True: only the folder is read; LLM_TRACE is deliberately not consulted (DEC-006-6). Stripping
+        # matches the environment path, so a whitespace-only folder counts as empty.
+        folder = os.environ.get("LLM_TRACE_FOLDER", "").strip()
+        if not folder:
+            raise ValueError("trace=True requires the LLM_TRACE_FOLDER environment variable to name a trace folder")
+        tracer = cls.__new__(cls)
+        tracer._folder = folder
+        tracer._enabled = True
+        return tracer
 
     @property
     def enabled(self) -> bool:
@@ -269,6 +329,8 @@ class _NoopSession:
     def log_chunk(self, *a: Any, **kw: Any) -> None: pass
     def log_tool_call(self, *a: Any, **kw: Any) -> None: pass
     def log_tool_result(self, *a: Any, **kw: Any) -> None: pass
+    def log_tool_error(self, name: str, note: str) -> None:
+        """Discard the tool-error note: the disabled session writes nothing (DEC-006-7, DEC-000-48)."""
     def log_error(self, *a: Any, **kw: Any) -> None: pass
     def close(self) -> None: pass
 

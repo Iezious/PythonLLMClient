@@ -4,7 +4,7 @@ Index only. Details live in the linked files.
 
 ## Public exports (`llm`)
 
-`__version__`, `LLMError`, `LLMSettingIgnoredWarning`, `LLMClient`, `OllamaAPIClient` (**deprecated**), `OpenAIAPIClient`, `LlamaSwapAPIClient`, `OpenAIChatCompletionsClient`, `LlamaSwapChatCompletionsClient`, `get_llm_client`, `substitute_placeholders`, `pydantic_to_openai_tool`, `LLMTracer`. See `interfaces.md`, Exposed: utilities, Exposed: warnings. The supported surface is the package top level. Pending top-level export: typed settings shapes and the message shape (DEC-000-18), the repeated-fill template helper (DEC-000-51).
+`__version__`, `LLMError`, `LLMErrorKind`, `LLMSettingIgnoredWarning`, `LLMToolObserverWarning`, `ToolEvent`, `ToolErrorKind`, `LLMClient`, `OllamaAPIClient` (**deprecated**), `OpenAIAPIClient`, `LlamaSwapAPIClient`, `OpenAIChatCompletionsClient`, `LlamaSwapChatCompletionsClient`, `get_llm_client`, `substitute_placeholders`, `pydantic_to_openai_tool`, `LLMTracer`. See `interfaces.md`, Exposed: utilities, Exposed: warnings, Exposed: error contract; `data-model.md`, Tool events, Error kinds. `LLMErrorKind`, `LLMToolObserverWarning`, `ToolEvent` and `ToolErrorKind` are agreed for release 0.2.1 and not yet built. The supported surface is the package top level. Pending top-level export: typed settings shapes and the message shape (DEC-000-18), the repeated-fill template helper (DEC-000-51).
 
 `OpenAIAPIClient` and `LlamaSwapAPIClient` mean Responses; the chat-completions behaviour is under the two `*ChatCompletionsClient` names. See `overview.md` What it is.
 
@@ -22,10 +22,23 @@ Every chat operation, tool conversations included, is available on both protocol
 
 | Variable | Meaning | See |
 |---|---|---|
-| `LLM_TRACE` | true-like value (`1`, `true`, `on`) enables tracing; needs `LLM_TRACE_FOLDER` too | `subsystems.md` Tracer |
-| `LLM_TRACE_FOLDER` | root folder for trace files | `data-model.md` Trace record |
+| `LLM_TRACE` | true-like value (`1`, `true`, `on`) enables tracing; needs `LLM_TRACE_FOLDER` too. Read only when the constructor's `trace` is not passed | `subsystems.md` Tracer |
+| `LLM_TRACE_FOLDER` | root folder for trace files; also the folder for `trace=True` (which refuses creation without it) | `data-model.md` Trace record |
 
-The library reads no credential from the environment. All other configuration is constructor arguments: `model`, `base_url`, `timeout`, `bearer_token` (the caller-provided credential), `default_options`. The factory also takes `protocol`. An application may read its own key from its environment and pass it in.
+The library reads no credential from the environment. An application may read its own key from its environment and pass it in.
+
+## Constructor and call arguments
+
+| Argument | Where | Meaning | See |
+|---|---|---|---|
+| `model`, `base_url`, `timeout`, `bearer_token`, `default_options` | every class, factory | as before; `timeout` is the total limit per request | `interfaces.md` Exposed: constructor arguments |
+| `trace` | every class (Ollama: passed to the base only), factory | not passed = environment decides; `False` = never; `True` = on, folder from `LLM_TRACE_FOLDER` | `interfaces.md` Exposed: constructor arguments |
+| `read_timeout` | OpenAI-family classes, factory (refused with `ollama`) | silence limit between reads of a streamed reply | `interfaces.md` Exposed: constructor arguments |
+| `protocol` | factory | `responses` (default) or `chat_completions` | `interfaces.md` Exposed: factory |
+| `tool_errors` | `chat_with_tools`, OpenAI family | `"result"` (default, tolerant) or `"raise"` (strict, opt-out) | `interfaces.md` Tool failures |
+| `on_tool_event` | `chat_with_tools`, OpenAI family | observer receiving `ToolEvent` | `interfaces.md` Tool event observer |
+
+`trace`, `read_timeout`, `tool_errors` and `on_tool_event` are agreed for release 0.2.1 and not yet built.
 
 ## Backend routes
 
@@ -45,10 +58,10 @@ The library reads no credential from the environment. All other configuration is
 
 | Component | See |
 |---|---|
-| Base client, backend clients, chat protocols, options layer | `subsystems.md` |
+| Base client (the no-shared-behaviour rule), backend clients, chat protocols, options layer | `subsystems.md` |
 | Tool loop, streaming and reasoning, tracer | `subsystems.md` |
-| Method contract, capability matrix (with protocol axis), factory, warnings, errors | `interfaces.md` |
-| Message, tool definition, trace record | `data-model.md` |
+| Method contract, tool failures, tool event observer, capability matrix (with protocol axis), constructor arguments, factory, warnings, typing contract, errors | `interfaces.md` |
+| Message, tool definition, tool events, error kinds, trace record | `data-model.md` |
 
 ## Open (architecture questions)
 

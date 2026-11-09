@@ -29,7 +29,7 @@ pyproject.toml        # Build config, dependencies, tool settings
 
 ## Key Patterns
 
-- **Base class**: `LLMClient` in `llm_client.py` holds shared HTTP plumbing (`_request`, `_stream_post`, `_iter_sse_data`, `_stream_openai_chat_response`, `_merge_options_base`). Subclasses override `_merge_options`, `chat`, `generate`, `chat_json`, `chat_with_tools`, `embed_batch`, `list_models`, `get_models` (the base raises `NotImplementedError`; there is no `abc`).
+- **Base class**: `LLMClient` in `llm_client.py` holds transport plumbing only (`_request`, `_stream_post`, `_iter_sse_data`: requests, streams, transport-error mapping, time limits, the tracer). No behaviour logic is shared between client classes: each class keeps its own copy of its behaviour, the tool loop included (`docs/architecture/subsystems.md` § Base client). The existing shared chat-completions stream parsers (`_stream_openai_chat_response`, `_stream_openai_tools_response`) and the option merge (`_merge_options_base`) stay in the base as they are and are not extended (DEC-arch-25). `chat_with_tools` takes `messages` as a read-only sequence of mappings (`Sequence[Mapping[str, Any]]`). Subclasses override `_merge_options`, `chat`, `generate`, `chat_json`, `chat_with_tools`, `embed_batch`, `list_models`, `get_models` (the base raises `NotImplementedError`; there is no `abc`).
 - **Async context manager**: All clients support `async with client:` for session lifecycle.
 - **Options merging**: Three-layer merge (defaults -> constructor defaults -> call-time) via `_merge_options_base` with alias support.
 - **No models dependency**: This package is self-contained. It does NOT depend on any external `models` package (pydantic is a declared runtime dependency in `dependencies`; the `dev` extra holds only pytest, pytest-asyncio, aioresponses, ruff — DEC-001-3).
@@ -37,7 +37,7 @@ pyproject.toml        # Build config, dependencies, tool settings
 ## Conventions
 
 - Python 3.11+
-- Type hints everywhere; use `TypedDict` for options, not dataclasses/Pydantic
+- Type hints everywhere; use `TypedDict` for options, not dataclasses/Pydantic; the base is generic over its options shape (`LLMClient[OptionsT]`, each class binds its own), and `uv run mypy --strict llm` stays clean (deprecated `ollama.py` silenced per module, DEC-arch-22, DEC-006-1)
 - `aiohttp` for all HTTP; no `requests` or `httpx`
 - Imports use `from llm.xxx import Yyy` (absolute; only `llm/__init__.py` uses relative imports)
 - Ruff for linting (line-length 120)
@@ -62,6 +62,7 @@ uv run pytest                  # Run unit AND live tests (live tests need server
 uv run pytest tests/ --ignore=tests/integrations  # Unit tests only (no servers)
 uv run pytest tests/integrations/  # Run integration tests (needs live servers)
 uv run ruff check llm/        # Lint
+uv run mypy --strict llm      # Type check (strict; ollama.py silenced per module)
 uv run ruff format llm/       # Format
 ```
 
@@ -112,5 +113,5 @@ This repo uses `code_index` (config `docs/.helpers/config.toml`); query it via `
 - `tests/AGENTS.md` — unit tests.
 - `tests/integrations/AGENTS.md` — live tests.
 
-See also: `docs/architecture/overview.md`; `DEC-001-3` (pydantic is a runtime dependency; supersedes DEC-000-43), `DEC-001-4` (version 0.2.0, declared in two places — `pyproject.toml` and `llm/__init__.py`; supersedes DEC-000-53).
+See also: `docs/architecture/overview.md`; `DEC-001-3` (pydantic is a runtime dependency; supersedes DEC-000-43), `DEC-arch-23` (version 0.2.1, declared in two places — `pyproject.toml` and `llm/__init__.py`; supersedes DEC-001-4, which superseded DEC-000-53).
 <!-- agent-ready:end -->

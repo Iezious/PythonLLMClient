@@ -366,6 +366,7 @@
 ### US-033 — A failing tool ends the conversation
 - **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (E2)
 - **Status:** delivered
+- **Scope:** strict handling, when the app chooses it; by default see US-064.
 - **Story:** As an application developer, I want a failing tool to end the call, so that a broken tool is never hidden from me.
 - **Acceptance criteria:**
   - **US-033.AC-1** — Given a tool that fails, when the model calls it, then the call ends with an error naming the tool.
@@ -396,6 +397,7 @@
 ### US-035 — Unexpected tool requests end with the library's error
 - **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (E4, E5)
 - **Status:** delivered on OpenAI and llama-swap; the deprecated Ollama keeps its old behaviour
+- **Scope:** strict handling, when the app chooses it; by default see US-064.
 - **Story:** As an application developer, I want odd model output reported as the library's error, so that I handle one kind of failure.
 - **Acceptance criteria:**
   - **US-035.AC-1** — Given the model asks for a tool that was not offered (not described to the model; a function supplied without being described is not offered), when the call runs, then the call ends with the library's error.
@@ -553,6 +555,7 @@
 ### US-048 — Turn tracing on and off
 - **Feature:** FEAT-011 · **Actor:** ACT-001 · **Realizes:** UC-011 (main, A1, A2)
 - **Status:** delivered
+- **Scope:** when the app does not set the per-client switch; see US-069.
 - **Story:** As an application developer, I want tracing to be on only when I ask, so that normal runs write nothing.
 - **Acceptance criteria:**
   - **US-048.AC-1** — Given tracing on with a folder, when a call is made, then exactly one new record for it appears under that day's folder.
@@ -759,5 +762,93 @@
   - **US-063.AC-2** — Given the app set no response format, when the developer asks for a JSON-only answer, then the server is asked for plain JSON.
 - **Delivered:** 001.core-fixes (2026-11-07)
 - **Source:** `[confirmed: user]` interview "finalize batch-2026-11-08 — extension 001/002" (2026-11-08)
+
+### US-064 — Tool-call failures go back to the model
+- **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (A8, E7)
+- **Status:** specified
+- **Story:** As an application developer, I want the model told when it gets a tool call wrong or a tool fails, so that the conversation carries on instead of ending.
+- **Acceptance criteria:**
+  - **US-064.AC-1** — Given tolerant handling, when the model asks for a tool that was not offered, then no tool runs.
+  - **US-064.AC-2** — Given tolerant handling, when the model's arguments cannot be read as named values, then the tool does not run.
+  - **US-064.AC-3** — Given tolerant handling, when the model passes an argument the tool does not have, then the tool does not run.
+  - **US-064.AC-4** — Given tolerant handling, when a tool fails, then the model is told the tool failed, without the tool's own failure text.
+  - **US-064.AC-5** — Given tolerant handling, when a tool's result cannot be made into text, then the model is told the tool failed.
+  - **US-064.AC-6** — Given tolerant handling and several tool calls in one round, when one of them fails, then the others still run, in the order asked.
+  - **US-064.AC-7** — Given tolerant handling, streamed or not, on OpenAI and llama-swap, on both chat protocols, when the model calls an unoffered tool in round 1, sends arguments that are not named values in round 2, passes an unknown argument in round 3 and answers in round 4, then the call returns round 4's answer without an error.
+  - **US-064.AC-8** — Given tolerant handling and a model that keeps making tool-call failures, when the round limit is reached, then the call ends with the round-limit error.
+  - **US-064.AC-9** — Given tolerant handling, when the app cancels the call, then the cancellation is not told to the model as a tool result.
+  - **US-064.AC-10** — Given the app chooses strict handling, when a tool-call failure happens, then the call ends as before (US-033, US-035).
+  - **US-064.AC-11** — Given the deprecated Ollama, when the app chooses a handling, then the call is refused, naming the reason.
+  - **US-064.AC-12** — Given tolerant handling, when the model asks for a tool that was not offered, then the model is told the tool is not available.
+  - **US-064.AC-13** — Given tolerant handling, when the model asks for a tool that was not offered, then the conversation continues.
+  - **US-064.AC-14** — Given tolerant handling, when the model's arguments cannot be read as named values, then the model is told its arguments are invalid.
+  - **US-064.AC-15** — Given tolerant handling, when the model's arguments cannot be read as named values, then the conversation continues.
+  - **US-064.AC-16** — Given tolerant handling, when the model passes an argument the tool does not have, then the model is told which argument is unknown.
+  - **US-064.AC-17** — Given tolerant handling, when a tool fails, then the conversation continues.
+  - **US-064.AC-18** — Given tolerant handling, when a tool's result cannot be made into text, then the conversation continues.
+  - **US-064.AC-19** — Given tolerant handling, when the app cancels the call, then the call stops.
+  - **US-064.AC-20** — Given the app does not choose a handling, when a tool-call failure happens, then the model is told and the conversation continues.
+- **Source:**
+  - `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" and "challenges — 0.2.1 asks" (2026-11-08)
+  - Tolerant handling is the default (title, AC-10, AC-11, AC-20): `[confirmed: user]` interview "Delta — tolerant handling becomes the default" (2026-11-09), C10
+
+### US-065 — Observe each tool call as it happens
+- **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (A9, E6, E7)
+- **Status:** specified
+- **Story:** As an application developer, I want to be told about each tool call, its result or its failure as it happens, so that I can show progress and keep my own record using the server's own id for the call.
+- **Acceptance criteria:**
+  - **US-065.AC-1** — Given an observer, when the model asks for a tool, then before the tool runs the observer is told the tool name, the server's id for the call and the arguments exactly as the model sent them.
+  - **US-065.AC-2** — Given an observer, when a tool finishes, then the observer is told the result text the model receives.
+  - **US-065.AC-3** — Given an observer, when a tool-call failure happens, then the observer is told the tool name, the call's id, the arguments as sent and which kind of failure it was.
+  - **US-065.AC-4** — Given several tool calls, when they run, then the observer is told about them in call order.
+  - **US-065.AC-5** — Given an awaitable observer, when tool calls happen, then the observer's work finishes before the tool call goes ahead.
+  - **US-065.AC-6** — Given strict handling and an observer, when a tool-call failure ends the call, then the observer has been told of that failure first.
+  - **US-065.AC-7** — Given strict handling, when the observer fails, then the call ends with that failure.
+  - **US-065.AC-8** — Given tolerant handling, when the observer fails as a tool call starts, then the tool does not run.
+  - **US-065.AC-9** — Given tolerant handling, when the observer fails, then the app gets a warning it can filter.
+  - **US-065.AC-10** — Given the deprecated Ollama, when the app gives an observer, then the call is refused, naming the reason.
+  - **US-065.AC-11** — Given tolerant handling, when the observer fails as a tool call starts, then the model is told the tool failed.
+  - **US-065.AC-12** — Given tolerant handling, when the observer fails as a tool call starts, then the conversation continues.
+  - **US-065.AC-13** — Given tolerant handling and tracing on, when the observer fails, then the trace record shows the failure.
+- **Source:** `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" and "challenges — 0.2.1 asks" (2026-11-08)
+
+### US-066 — A tool accepting any argument names runs
+- **Feature:** FEAT-007 · **Actor:** ACT-001 · **Realizes:** UC-007 (A10)
+- **Status:** specified
+- **Story:** As an application developer, I want a generic tool function that takes any named arguments to be accepted, so that I need not describe its arguments a second time in code.
+- **Acceptance criteria:**
+  - **US-066.AC-1** — Given a tool function that accepts any argument names, when the model calls it with arguments, then it runs with those arguments.
+- **Source:** `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
+
+### US-067 — Tell failures apart without reading the message
+- **Feature:** FEAT-001 · **Actor:** ACT-001 · **Realizes:** UC-001 (E3), Cross-feature rules
+- **Status:** specified
+- **Story:** As an application developer, I want the library's error to tell me what kind of failure it was, so that I can react to a refused credential, a time-out or a dropped stream without parsing text.
+- **Acceptance criteria:**
+  - **US-067.AC-1** — Given the server refuses a request, when the call ends, then the error says it was a refusal and gives the server's status.
+  - **US-067.AC-2** — Given an exceeded time limit, an unreachable server, an interrupted stream, a malformed reply, a failure reported inside a stream, an incomplete reply or a failed tool conversation, when the call ends, then the error says which of these it was.
+  - **US-067.AC-3** — Given any failure, when the call ends, then the error's message reads as before.
+- **Source:** `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
+
+### US-068 — A silent stream ends early
+- **Feature:** FEAT-001 · **Actor:** ACT-001 · **Realizes:** UC-001 (A5, E4)
+- **Status:** specified
+- **Story:** As an application developer, I want a stream that goes silent to end early, so that a hung server is found quickly while long replies still finish.
+- **Acceptance criteria:**
+  - **US-068.AC-1** — Given a silence limit, when a streamed reply sends nothing for longer than that limit, then the call ends with the library's time-limit error.
+  - **US-068.AC-2** — Given a silence limit shorter than the reply takes, when the reply keeps producing pieces, then it finishes.
+  - **US-068.AC-3** — Given no silence limit, when the developer streams, then only the whole-request limit applies, as before.
+- **Source:** `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
+
+### US-069 — Force tracing on or off for a client
+- **Feature:** FEAT-011 · **Actor:** ACT-001 · **Realizes:** UC-011 (A4, E5)
+- **Status:** specified
+- **Story:** As an application developer, I want to switch tracing per client regardless of the environment, so that my app decides whether prompts are written to disk.
+- **Acceptance criteria:**
+  - **US-069.AC-1** — Given tracing forced off for a client, when the environment turns tracing on, then that client writes no records.
+  - **US-069.AC-2** — Given tracing forced on and a trace folder in the environment, when a call is made, then a record is written even if the environment's switch is off.
+  - **US-069.AC-3** — Given tracing forced on and no trace folder, when the app builds the client, then it is refused, naming the reason.
+  - **US-069.AC-4** — Given the app does not set the switch, when a call is made, then the environment decides, as before.
+- **Source:** `[confirmed: user]` interview "Delta — app-requested 0.2.1 asks" (2026-11-08)
 </auto-generated>
 <!-- product-spec:end -->

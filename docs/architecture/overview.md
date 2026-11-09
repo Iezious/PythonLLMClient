@@ -22,7 +22,7 @@ The existing public names `OpenAIAPIClient` and `LlamaSwapAPIClient` mean Respon
 
 The contract covers text generation, chat, JSON-mode chat, tool-calling chat, streaming with a per-fragment callback, reasoning output, embeddings and model listing. It is built on `aiohttp`; there is no other runtime HTTP stack.
 
-It is a standalone library. It has no in-tree callers besides tests, no database, queue or service of its own. Outward it depends only on the HTTP API of the configured backend and on the trace switch environment variables `LLM_TRACE` and `LLM_TRACE_FOLDER`. The library never reads a backend credential from the environment; the caller provides it.
+It is a standalone library. It has no in-tree callers besides tests, no database, queue or service of its own. Outward it depends only on the HTTP API of the configured backend and on the trace switch environment variables `LLM_TRACE` and `LLM_TRACE_FOLDER` (the constructor's `trace` argument can override the switch; the folder still comes from the environment). The library never reads a backend credential from the environment; the caller provides it.
 
 ## Component map
 
@@ -39,13 +39,14 @@ public surface (package exports)
         |  all extend directly (no protocol layer in between)
    LLMClient (base)
         |
-   shared: options merge, HTTP request contract, SSE parsing, tracer
+   shared transport plumbing: HTTP request contract (time limits, error mapping),
+   SSE reader, tracer; plus the existing chat-completions stream parsers and options merge
 
  utilities: substitute_placeholders, pydantic_to_openai_tool
- signal:    ignored-setting warning category
+ signals:   ignored-setting warning category, tool-observer warning category
 ```
 
-Responsibilities of each box are in `subsystems.md`.
+Responsibilities of each box are in `subsystems.md`. The client classes share no behaviour logic: the base holds transport plumbing only, and each class carries its own copy of its behaviour, the tool loop included. The specification is what is maintained, and any class may be rewritten on its own (`subsystems.md`, Base client).
 
 ## Session lifecycle
 
@@ -62,7 +63,8 @@ One HTTP session per client. It is opened lazily on first use or on entering `as
 
 - HTTP: `aiohttp` for all backend traffic, because the library is async and needs an async HTTP client.
 - Options are typed dictionaries rather than dataclasses or schema-validated models: plain dicts, no dependencies.
-- One total time limit bounds each request, because local models can be slow.
+- One total time limit bounds each request, because local models can be slow. On the OpenAI family the app may add a silence limit between reads of a streamed reply, so a stalled stream fails without lowering the total.
+- The public surface is statically typed and checked strictly; the package ships its typing marker (`interfaces.md`, Exposed: typing contract).
 - Streaming wire format: OpenAI-style server-sent events. On chat completions each event carries a choice delta; on Responses each event is typed. Reasoning reaches callers through the `<think>` tag convention on both protocols (see `data-model.md`).
 - Chat protocol for the OpenAI family: Responses by default, chat completions for compatibility. Responses is the current OpenAI API and lets reasoning models carry their reasoning across tool rounds. Chat completions stays because not every OpenAI-compatible server offers Responses.
 - Runtime dependencies: `aiohttp`, `typing_extensions` and `pydantic`, the schema library behind the tool-description helper. It is imported when the package loads, so it is declared as a runtime dependency and the package loads after a normal install. We chose to declare it rather than make the import optional because apps that use the helper pass its models and so have it anyway (DEC-001-3).
@@ -74,10 +76,11 @@ One HTTP session per client. It is opened lazily on first use or on entering `as
 - Multimodal message content.
 - Server-side conversation state on the Responses protocol. Every call sends the full conversation, and the library asks the provider not to store it.
 - Configuration files; all settings are constructor arguments, apart from the trace switch environment variables. An application may read its own credential from its environment and pass it in.
-- Logging or metrics. There are two observability signals: the opt-in trace files, and a library-specific warning raised when a setting is ignored because the Responses protocol has no counterpart for it (see `interfaces.md`, Exposed: warnings).
+- Logging or metrics. The observability signals are: the opt-in trace files; a library-specific warning raised when a setting is ignored because the Responses protocol has no counterpart for it; a library-specific warning raised when the tool-event observer fails in tolerant mode (see `interfaces.md`, Exposed: warnings). The tool-event observer itself is an application hook on the tool loop (`interfaces.md`, Tool event observer).
 
 ## Decision history
 
 - 2026-11-07 — The schema library behind the tool-description helper becomes a declared runtime dependency. See DEC-001-3, superseding DEC-000-43.
 - 2026-11-07 — The OpenAI family gains a second chat protocol, Responses, as the default. The protocol is chosen by client class, the existing class names mean Responses, and chat completions moves to new compatibility classes. See DEC-arch-1, DEC-arch-2.
 - 2026-11-08 — The Responses protocol is built for every chat operation, tool conversations included. See DEC-004-19 (supersedes the interim refusal DEC-003-4).
+- 2026-11-09 (release 0.2.1) — No shared behaviour logic between client classes becomes an architecture rule; the base holds transport plumbing only. The OpenAI family gains a streamed-reply silence limit, the constructor gains an explicit trace switch, a tool-observer warning category is added, and the public surface is typed strictly. See DEC-arch-15, DEC-arch-20, DEC-arch-22; version DEC-arch-23.

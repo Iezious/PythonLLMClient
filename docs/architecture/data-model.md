@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Data shapes that callers pass in or rely on: messages, tool definitions, settings keys, the reasoning tag convention and the trace file. There is no persistent store.
+Data shapes that callers pass in or rely on: messages, tool definitions, tool events, error kinds, settings keys, the reasoning tag convention and the trace file. There is no persistent store.
 
 ## Message
 
 A message is a dictionary with required `role` and `content` strings, used by `chat`, `chat_json` and `generate`. Content is text only; multimodal content is not supported.
 
-`chat_with_tools` accepts a list of string-valued dictionaries; during the loop, richer turns are appended to an internal copy:
+`chat_with_tools` accepts a read-only sequence of mappings with string keys and any values (`Sequence[Mapping[str, Any]]`, see `interfaces.md`, Exposed: typing contract), so the caller may pass turns that carry tool calls. During the loop, richer turns are appended to an internal copy:
 
 | Backend family | Assistant tool-call turn | Tool-result turn |
 |---|---|---|
@@ -29,6 +29,25 @@ All backends take the OpenAI function-tool shape:
 `tools` passed to `chat_with_tools` is a mapping from tool name to callable.
 
 This shape is accepted on both OpenAI-family protocols. A Responses class converts it to the protocol's tool shape. The same applies to the `response_format` shape (`json_object` / `json_schema`). Mapping details are in DEC-arch-10.
+
+## Tool events
+
+`ToolEvent` is the typed dictionary the tool-event observer receives (`on_tool_event`, see `interfaces.md`, Tool event observer). It is exported at the top level and is the same on both OpenAI-family protocols.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `type` | `"start"` \| `"result"` \| `"error"` | `start` before the tool runs; then `result` or `error` — except when the observer itself fails under tolerant handling, after which it receives no further event for that tool call (see `interfaces.md` § Tool event observer; DEC-arch-26) |
+| `name` | text | the tool name the model requested |
+| `call_id` | text or none | the call identity the server gave the call (the Responses call id, or the chat-completions tool-call id); none when the server gave none |
+| `arguments` | text | the raw arguments as the model sent them; a mapping is JSON-encoded, missing arguments are empty text |
+| `output` | text or none | the result text the model receives, on a `result` event; none otherwise |
+| `error_kind` | `ToolErrorKind` or none | the failure kind, on an `error` event; none otherwise |
+
+`ToolErrorKind` is an exported closed set of names: `"not_offered"`, `"bad_arguments"`, `"unknown_argument"`, `"tool_raised"`, `"unserialisable_result"`. Their meanings are in `interfaces.md`, Tool failures.
+
+## Error kinds
+
+`LLMErrorKind` is an exported closed set of names, carried by `LLMError.kind`: `"status"`, `"timeout"`, `"connection"`, `"interrupted"`, `"invalid_reply"`, `"server_failed"`, `"incomplete"`, `"tool"`. Which failure carries which kind is in `interfaces.md`, Exposed: error contract. `server_failed` covers a failure the server reports, streamed or not, which is why it is not named after streams (DEC-arch-19).
 
 ## Settings
 
@@ -82,9 +101,13 @@ Written only when tracing is enabled.
   3. `MESSAGE HISTORY` (`[role] content`, tool calls shown as `-> tool_call: name(args)`). The system message the library inserted from the instruction is not repeated here; system messages the caller supplied are.
   4. `REQUEST` (method and path, then the payload as indented JSON; in tool loops tagged with the loop number). The request is shown as sent, so it still contains the instruction.
   5. `CHUNK`, one per streamed piece (plain streaming chat only, not tool-path streams).
-  6. `TOOL CALL: <name>` and `TOOL RESULT: <name>`.
+  6. `TOOL CALL: <name>` and `TOOL RESULT: <name>`. In tolerant mode a failing call's result is the text the model was told, followed by a note naming the failure kind; an observer failure is recorded too (DEC-arch-21).
   7. `RESPONSE` (final text, or the count of embeddings returned).
   8. `ERROR` (`<ExceptionType>: <message>`), followed by the exception being re-raised.
   9. Footer `END TRACE`.
 - Request headers are not recorded; the credential header is never written.
 - Recording scope and the tracing rules are in `subsystems.md`, Tracer.
+
+## Decision history
+
+- 2026-11-09 (release 0.2.1) — `ToolEvent`, `ToolErrorKind` and `LLMErrorKind` added as exported shapes. Tool-chat messages are accepted as a sequence of mappings with any values. The trace records tolerant tool failures. See DEC-arch-14, DEC-arch-19, DEC-arch-21, DEC-arch-22.
